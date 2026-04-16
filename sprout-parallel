@@ -1,0 +1,621 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ─── Configuration ────────────────────────────────────────────────────────────
+
+SPROUT_PROJECTS_ROOT="${SPROUT_PROJECTS_ROOT:-/Users/mehdi/projects}"
+SCRIPT_NAME="$(basename "$0")"
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+# die: print error to stderr and exit 1 (user error)
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+# die2: print error to stderr and exit 2 (git/internal failure)
+die2() {
+  echo "Error: $*" >&2
+  exit 2
+}
+
+# safe_name: convert a branch name to a filesystem-safe folder name
+#   feature/my-thing  →  feature-my-thing
+safe_name() {
+  local name="${1//\//-}"
+  name="${name#-}"
+  name="${name%-}"
+  echo "$name"
+}
+
+# db_safe_name: convert a folder name to a MySQL-safe identifier
+#   feature-my-thing  →  feature_my_thing
+db_safe_name() {
+  echo "${1//[^a-zA-Z0-9]/_}"
+}
+
+# parse_env_var: read a variable value from a .env file
+#   $1: variable name (e.g. DB_DATABASE)
+#   $2: path to .env file
+parse_env_var() {
+  grep "^${1}=" "$2" 2>/dev/null | head -1 | cut -d= -f2-
+}
+
+# resolve_project: set REPLY_PROJECT_NAME and REPLY_PROJECT_PATH
+resolve_project() {
+  local project_name="${1:-}"
+
+  if [[ -n "$project_name" ]]; then
+    local project_path="$SPROUT_PROJECTS_ROOT/$project_name"
+    [[ -d "$project_path" && ( -d "$project_path/.git" || -f "$project_path/.git" ) ]] \
+      || die "Project '$project_name' not found under '$SPROUT_PROJECTS_ROOT'."
+    REPLY_PROJECT_NAME="$project_name"
+    REPLY_PROJECT_PATH="$project_path"
+  else
+    local git_root
+    git_root="$(git rev-parse --show-toplevel 2>/dev/null)" \
+      || die "Not inside a project directory. Use --project <name> to specify one."
+
+    [[ "$git_root" == "$SPROUT_PROJECTS_ROOT"/* ]] \
+      || die "Not inside a project directory. Use --project <name> to specify one."
+
+    local rel="${git_root#${SPROUT_PROJECTS_ROOT}/}"
+    local candidate="${rel%%/*}"
+
+    local actual_name="$candidate"
+    if [[ "$candidate" == *-worktrees ]]; then
+      actual_name="${candidate%-worktrees}"
+    fi
+
+    local project_path="$SPROUT_PROJECTS_ROOT/$actual_name"
+    [[ -d "$project_path" && ( -d "$project_path/.git" || -f "$project_path/.git" ) ]] \
+      || die "Not inside a project directory. Use --project <name> to specify one."
+
+    REPLY_PROJECT_NAME="$actual_name"
+    REPLY_PROJECT_PATH="$project_path"
+  fi
+}
+
+# ─── Setup Helpers ─────────────────────────────────────────────────────────────
+
+copy_dir_from_project() {
+  local src_dir="$1"
+  local dest_dir="$2"
+  local label="$3"
+
+  [[ -d "$src_dir" ]] || return 0
+
+  echo "  → Copying $label from main project"
+  if command -v rsync > /dev/null 2>&1; then
+    rsync -a --delete "$src_dir/" "$dest_dir/" \
+      || echo "  Warning: rsync of $label exited with errors."
+  else
+    rm -rf "$dest_dir"
+    cp -r "$src_dir" "$dest_dir" \
+      || echo "  Warning: cp of $label exited with errors."
+  fi
+}
+
+setup_db() {
+  local dir="$1"
+  local folder_name="$2"
+  local env_file="$dir/.env"
+
+  if ! command -v mysql > /dev/null 2>&1; then
+    echo "  Warning: mysql not found — skipping database setup."
+    return 0
+  fi
+
+  [[ -f "$env_file" ]] || return 0
+
+  local src_db db_user db_pass db_host db_port
+  src_db="$(parse_env_var DB_DATABASE "$env_file")"
+  db_user="$(parse_env_var DB_USERNAME "$env_file")"
+  db_pass="$(parse_env_var DB_PASSWORD "$env_file")"
+  db_host="$(parse_env_var DB_HOST "$env_file")"
+  db_port="$(parse_env_var DB_PORT "$env_file")"
+
+  db_host="${db_host:-127.0.0.1}"
+  db_port="${db_port:-3306}"
+
+  if [[ -z "$src_db" || -z "$db_user" ]]; then
+    echo "  Warning: Could not parse DB credentials from .env — skipping database setup."
+    return 0
+  fi
+
+  local new_db="${src_db}_$(db_safe_name "$folder_name")"
+
+  export MYSQL_PWD="$db_pass"
+  local mysql_opts="-h${db_host} -P${db_port} -u${db_user}"
+
+  echo "  → Creating database '$new_db' (clone of '$src_db')"
+  if ! mysql $mysql_opts -e "CREATE DATABASE IF NOT EXISTS \`${new_db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>&1; then
+    echo "  Warning: Failed to create database '$new_db' — skipping."
+    unset MYSQL_PWD
+    return 0
+  fi
+
+  echo "  → Cloning data from '$src_db' into '$new_db'"
+  if command -v mysqldump > /dev/null 2>&1; then
+    mysqldump $mysql_opts --single-transaction --set-gtid-purged=OFF "$src_db" \
+      | mysql $mysql_opts "$new_db" \
+      || echo "  Warning: Database clone may be incomplete."
+  else
+    echo "  Warning: mysqldump not found — database created but not populated."
+  fi
+
+  unset MYSQL_PWD
+
+  # Point the worktree .env at the new database
+  sed -i '' "s|^DB_DATABASE=.*|DB_DATABASE=${new_db}|" "$env_file"
+  echo "  → Updated .env: DB_DATABASE=${new_db}"
+}
+
+drop_worktree_db() {
+  local env_file="$1"
+
+  [[ -f "$env_file" ]] || return 0
+  command -v mysql > /dev/null 2>&1 || return 0
+
+  local wt_db db_user db_pass db_host db_port
+  wt_db="$(parse_env_var DB_DATABASE "$env_file")"
+  db_user="$(parse_env_var DB_USERNAME "$env_file")"
+  db_pass="$(parse_env_var DB_PASSWORD "$env_file")"
+  db_host="$(parse_env_var DB_HOST "$env_file")"
+  db_port="$(parse_env_var DB_PORT "$env_file")"
+
+  db_host="${db_host:-127.0.0.1}"
+  db_port="${db_port:-3306}"
+
+  [[ -n "$wt_db" && -n "$db_user" ]] || return 0
+
+  export MYSQL_PWD="$db_pass"
+  echo "  → Dropping database '$wt_db'"
+  mysql "-h${db_host}" "-P${db_port}" "-u${db_user}" \
+    -e "DROP DATABASE IF EXISTS \`${wt_db}\`;" 2>&1 \
+    || echo "  Warning: Failed to drop database '$wt_db'."
+  unset MYSQL_PWD
+}
+
+run_setup() {
+  local dir="$1"
+  local proj_path="${2:-}"
+  local folder_name="${3:-}"
+  local ran_any=false
+
+  echo ""
+  echo "Running setup in $dir ..."
+
+  # .env: prefer the main project's real .env (has actual credentials),
+  # fall back to .env.example
+  if [[ ! -f "$dir/.env" ]]; then
+    if [[ -n "$proj_path" && -f "$proj_path/.env" ]]; then
+      echo "  → Copying .env from main project"
+      cp "$proj_path/.env" "$dir/.env"
+    elif [[ -f "$dir/.env.example" ]]; then
+      echo "  → Copying .env.example to .env"
+      cp "$dir/.env.example" "$dir/.env"
+    fi
+    ran_any=true
+  fi
+
+  # Database: clone from main project and update DB_DATABASE
+  if [[ -n "$folder_name" ]]; then
+    setup_db "$dir" "$folder_name"
+    ran_any=true
+  fi
+
+  # PHP / Composer
+  if [[ -f "$dir/composer.json" ]]; then
+    if command -v composer > /dev/null 2>&1; then
+      if [[ -n "$proj_path" && -d "$proj_path/vendor" ]]; then
+        copy_dir_from_project "$proj_path/vendor" "$dir/vendor" "vendor"
+        echo "  → Running composer dump-autoload"
+        composer dump-autoload --working-dir="$dir" 2>&1 \
+          | grep -v "does not comply with psr-4" || true
+      else
+        echo "  → Running composer install"
+        composer install --no-interaction --working-dir="$dir" \
+          || echo "  Warning: composer install exited with errors."
+      fi
+      ran_any=true
+    else
+      echo "  Warning: composer.json found but composer is not installed — skipping."
+    fi
+  fi
+
+  # Node / JS
+  if [[ -f "$dir/package.json" ]]; then
+    local node_cmd=""
+    if [[ -f "$dir/yarn.lock" ]] && command -v yarn > /dev/null 2>&1; then
+      node_cmd="yarn"
+    elif [[ -f "$dir/pnpm-lock.yaml" ]] && command -v pnpm > /dev/null 2>&1; then
+      node_cmd="pnpm"
+    elif command -v npm > /dev/null 2>&1; then
+      node_cmd="npm"
+    fi
+
+    if [[ -n "$node_cmd" ]]; then
+      if [[ -n "$proj_path" && -d "$proj_path/node_modules" ]]; then
+        copy_dir_from_project "$proj_path/node_modules" "$dir/node_modules" "node_modules"
+        echo "  → Running $node_cmd install (incremental)"
+      else
+        echo "  → Running $node_cmd install"
+      fi
+      (cd "$dir" && "$node_cmd" install) \
+        || echo "  Warning: $node_cmd install exited with errors."
+      ran_any=true
+    else
+      echo "  Warning: package.json found but no package manager (npm/yarn/pnpm) found — skipping."
+    fi
+  fi
+
+  if [[ "$ran_any" == false ]]; then
+    echo "  (nothing to set up)"
+  fi
+}
+
+# ─── Commands ─────────────────────────────────────────────────────────────────
+
+cmd_create() {
+  local branch=""
+  local project_arg=""
+  local base_branch="main"
+  local skip_setup=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project)
+        [[ -n "${2:-}" ]] || die "Missing value for --project."
+        project_arg="$2"
+        shift 2
+        ;;
+      --from)
+        [[ -n "${2:-}" ]] || die "Missing value for --from."
+        base_branch="$2"
+        shift 2
+        ;;
+      --no-setup)
+        skip_setup=true
+        shift
+        ;;
+      -*)
+        die "Unknown option: $1. Run '$SCRIPT_NAME help create' for usage."
+        ;;
+      *)
+        [[ -z "$branch" ]] || die "Unexpected argument: $1. Run '$SCRIPT_NAME help create' for usage."
+        branch="$1"
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$branch" ]] \
+    || die "Missing required argument: <branch-name>. Run '$SCRIPT_NAME help create' for usage."
+
+  resolve_project "$project_arg"
+  local proj_name="$REPLY_PROJECT_NAME"
+  local proj_path="$REPLY_PROJECT_PATH"
+
+  # Verify base branch exists
+  git -C "$proj_path" rev-parse --verify "refs/heads/$base_branch" > /dev/null 2>&1 \
+    || git -C "$proj_path" rev-parse --verify "refs/remotes/origin/$base_branch" > /dev/null 2>&1 \
+    || die "Base branch '$base_branch' does not exist in project '$proj_name'."
+
+  # Ensure branch does not already exist (local or remote)
+  if git -C "$proj_path" rev-parse --verify "refs/heads/$branch" > /dev/null 2>&1 \
+    || git -C "$proj_path" rev-parse --verify "refs/remotes/origin/$branch" > /dev/null 2>&1; then
+    die "Branch '$branch' already exists in '$proj_name'. sprout-parallel only creates new branches."
+  fi
+
+  local folder_name
+  folder_name="$(safe_name "$branch")"
+  local worktrees_dir="$SPROUT_PROJECTS_ROOT/${proj_name}-worktrees"
+  local worktree_path="$worktrees_dir/$folder_name"
+
+  mkdir -p "$worktrees_dir"
+
+  git -C "$proj_path" worktree add -b "$branch" "$worktree_path" "$base_branch" \
+    || die2 "git worktree add failed. Ensure git 2.17+ is installed."
+
+  echo "Created worktree for branch '$folder_name'"
+  echo "  Project : $proj_name"
+  echo "  Branch  : $branch"
+  echo "  Path    : $worktree_path"
+  echo "  Base    : $base_branch"
+
+  if [[ "$skip_setup" == false ]]; then
+    run_setup "$worktree_path" "$proj_path" "$folder_name"
+  fi
+}
+
+cmd_delete() {
+  local branch=""
+  local project_arg=""
+  local force=false
+  local keep_db=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project)
+        [[ -n "${2:-}" ]] || die "Missing value for --project."
+        project_arg="$2"
+        shift 2
+        ;;
+      --force)
+        force=true
+        shift
+        ;;
+      --keep-db)
+        keep_db=true
+        shift
+        ;;
+      -*)
+        die "Unknown option: $1. Run '$SCRIPT_NAME help delete' for usage."
+        ;;
+      *)
+        [[ -z "$branch" ]] || die "Unexpected argument: $1. Run '$SCRIPT_NAME help delete' for usage."
+        branch="$1"
+        shift
+        ;;
+    esac
+  done
+
+  [[ -n "$branch" ]] \
+    || die "Missing required argument: <branch-name>. Run '$SCRIPT_NAME help delete' for usage."
+
+  resolve_project "$project_arg"
+  local proj_name="$REPLY_PROJECT_NAME"
+  local proj_path="$REPLY_PROJECT_PATH"
+
+  local folder_name
+  folder_name="$(safe_name "$branch")"
+  local worktree_path="$SPROUT_PROJECTS_ROOT/${proj_name}-worktrees/$folder_name"
+
+  [[ -d "$worktree_path" ]] \
+    || die "No worktree found for branch '$branch' in project '$proj_name'."
+
+  # Check for uncommitted changes
+  local dirty
+  dirty="$(git -C "$worktree_path" status --porcelain 2>/dev/null || true)"
+  if [[ -n "$dirty" && "$force" == false ]]; then
+    die "Worktree '$branch' has uncommitted changes. Use --force to delete anyway."
+  fi
+
+  # Drop the worktree database before the folder is removed
+  if [[ "$keep_db" == false ]]; then
+    drop_worktree_db "$worktree_path/.env"
+  fi
+
+  if [[ "$force" == true ]]; then
+    git -C "$proj_path" worktree remove --force "$worktree_path" \
+      || die2 "git worktree remove failed."
+  else
+    git -C "$proj_path" worktree remove "$worktree_path" \
+      || die2 "git worktree remove failed."
+  fi
+
+  git -C "$proj_path" worktree prune
+
+  echo "Deleted worktree '$folder_name'"
+  echo "  Project : $proj_name"
+  echo "  Path    : $worktree_path"
+}
+
+cmd_list() {
+  local project_arg=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project)
+        [[ -n "${2:-}" ]] || die "Missing value for --project."
+        project_arg="$2"
+        shift 2
+        ;;
+      -*)
+        die "Unknown option: $1. Run '$SCRIPT_NAME help list' for usage."
+        ;;
+      *)
+        die "Unexpected argument: $1. Run '$SCRIPT_NAME help list' for usage."
+        ;;
+    esac
+  done
+
+  resolve_project "$project_arg"
+  local proj_name="$REPLY_PROJECT_NAME"
+
+  local worktrees_dir="$SPROUT_PROJECTS_ROOT/${proj_name}-worktrees"
+
+  if [[ ! -d "$worktrees_dir" ]]; then
+    echo "No parallel worktrees found for project: $proj_name"
+    return 0
+  fi
+
+  local found=false
+  local lines=()
+
+  for entry in "$worktrees_dir"/*/; do
+    [[ -d "$entry" ]] || continue
+    [[ -d "${entry}.git" || -f "${entry}.git" ]] || continue
+
+    local wt_branch
+    wt_branch="$(git -C "$entry" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+
+    local wt_porcelain
+    wt_porcelain="$(git -C "$entry" status --porcelain 2>/dev/null || true)"
+    local wt_status="clean"
+    [[ -n "$wt_porcelain" ]] && wt_status="dirty"
+
+    lines+=("  ${entry%/}  [$wt_branch]  $wt_status")
+    found=true
+  done
+
+  if [[ "$found" == false ]]; then
+    echo "No parallel worktrees found for project: $proj_name"
+    return 0
+  fi
+
+  echo "Worktrees for project: $proj_name"
+  printf '%s\n' "${lines[@]}"
+}
+
+cmd_help() {
+  local topic="${1:-}"
+
+  case "$topic" in
+    create)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME create <branch-name> [options]
+
+  Creates a new git branch and a new worktree for it.
+
+ARGUMENTS:
+  <branch-name>        Required. Name of the new branch to create.
+                       Must not already exist in the repository.
+
+OPTIONS:
+  --project <name>     Target project under \$SPROUT_PROJECTS_ROOT.
+                       Auto-detected when inside a project directory.
+  --from <base>        Base branch for the new branch. Default: main
+  --no-setup           Skip automatic setup (composer, npm, db clone, etc.)
+
+SETUP (auto-detected, runs after worktree creation):
+  .env                 Copied from main project's .env (real credentials)
+  DB_DATABASE          New database cloned from main and .env updated
+  composer.json        vendor/ seeded from main project + composer dump-autoload
+  package.json         node_modules/ seeded from main project + npm/yarn/pnpm install
+
+EXAMPLES:
+  $SCRIPT_NAME create feature/my-thing
+  $SCRIPT_NAME create hotfix/urgent --from production
+  $SCRIPT_NAME create feature/my-thing --project scooda
+  $SCRIPT_NAME create feature/my-thing --no-setup
+
+WORKTREE PATH:
+  \$SPROUT_PROJECTS_ROOT/<project>-worktrees/<branch-folder>/
+
+EXIT CODES:
+  0  Success
+  1  User error (branch exists, project not found, missing args)
+  2  git command failed
+EOF
+      ;;
+    delete)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME delete <branch-name> [options]
+
+  Removes a worktree folder, its git registration, and its cloned database.
+
+ARGUMENTS:
+  <branch-name>        Required. Branch name whose worktree to delete.
+
+OPTIONS:
+  --project <name>     Target project. Auto-detected if inside a project.
+  --force              Required when the worktree has uncommitted changes.
+  --keep-db            Skip dropping the worktree's cloned database.
+
+EXAMPLES:
+  $SCRIPT_NAME delete feature/my-thing
+  $SCRIPT_NAME delete feature/my-thing --force
+  $SCRIPT_NAME delete feature/my-thing --keep-db
+  $SCRIPT_NAME delete feature/my-thing --project scooda
+
+EXIT CODES:
+  0  Success
+  1  User error (not found, dirty without --force, project not found)
+  2  git command failed
+EOF
+      ;;
+    list)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME list [options]
+
+  Lists all parallel worktrees for a project.
+
+OPTIONS:
+  --project <name>     Target project. Auto-detected if inside a project.
+
+EXAMPLES:
+  $SCRIPT_NAME list
+  $SCRIPT_NAME list --project scooda
+
+OUTPUT (when worktrees exist):
+  Worktrees for project: scooda
+    /Users/mehdi/projects/scooda-worktrees/feature-my-thing  [feature/my-thing]  clean
+    /Users/mehdi/projects/scooda-worktrees/fix-TICKET-123    [fix/TICKET-123]    dirty
+
+EXIT CODES:
+  0  Always (even when no worktrees found)
+  1  Project not found
+EOF
+      ;;
+    ""|help)
+      cat <<EOF
+$SCRIPT_NAME — git worktree manager
+
+USAGE:
+  $SCRIPT_NAME <command> [options]
+
+COMMANDS:
+  create <branch>   Create a new branch and worktree
+  delete <branch>   Remove a worktree, its git registration, and its database
+  list              List all worktrees for a project
+  help [command]    Show help for a specific command
+
+GLOBAL OPTIONS:
+  --help, -h        Show this help message
+
+ENVIRONMENT:
+  SPROUT_PROJECTS_ROOT   Root directory containing your git projects.
+                         Default: /Users/mehdi/projects
+
+WORKTREE LOCATION:
+  Worktrees are created at:
+  \$SPROUT_PROJECTS_ROOT/<project>-worktrees/<branch-folder>/
+
+  Example:
+    Project:  /Users/mehdi/projects/scooda
+    Branch:   feature/my-thing
+    Worktree: /Users/mehdi/projects/scooda-worktrees/feature-my-thing
+
+EXAMPLES:
+  $SCRIPT_NAME create feature/my-thing
+  $SCRIPT_NAME create feature/my-thing --from develop --project scooda
+  $SCRIPT_NAME delete feature/my-thing
+  $SCRIPT_NAME delete feature/my-thing --force
+  $SCRIPT_NAME list
+  $SCRIPT_NAME list --project scooda
+
+For command-specific help:
+  $SCRIPT_NAME help create
+  $SCRIPT_NAME help delete
+  $SCRIPT_NAME help list
+EOF
+      ;;
+    *)
+      die "Unknown help topic: '$topic'. Available: create, delete, list"
+      ;;
+  esac
+}
+
+# ─── Entrypoint ───────────────────────────────────────────────────────────────
+
+main() {
+  local cmd="${1:-help}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    create)    cmd_create "$@" ;;
+    delete)    cmd_delete "$@" ;;
+    list)      cmd_list   "$@" ;;
+    help)      cmd_help   "$@" ;;
+    --help|-h) cmd_help ;;
+    *)
+      echo "Error: Unknown command: '$cmd'. Run '$SCRIPT_NAME help' for usage." >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
