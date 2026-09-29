@@ -64,7 +64,7 @@ first, then alphabetically within each group.
     "changes":3,
     "ahead":3,
     "behind":1,
-    "lastCommit":{"subject":"Add Stripe webhook","when":"2 hours ago"},
+    "lastCommit":{"hash":"a1f9c2e","subject":"Add Stripe webhook","when":"2 hours ago"},
     "mysqlDb":"scooda_feature_payments_v2",
     "redisDb":3,
     "redisPrefix":"scooda_feature_payments_v2_"
@@ -82,7 +82,7 @@ Field rules:
 | `base` | `git config branch.<branch>.sproutBase` | `"main"` |
 | `changes` | line count of `git status --porcelain` | `0` |
 | `ahead` / `behind` | `git rev-list --left-right --count <base>...HEAD` | `null` if base ref missing |
-| `lastCommit` | `git log -1 --format=%s` / `%cr` | `null` |
+| `lastCommit` | `git log -1 --format=%h` / `%s` / `%cr` | `null` |
 | `mysqlDb` | `DB_DATABASE` in worktree `.env` | `null` |
 | `redisDb` | `REDIS_DB` in worktree `.env`, as a number | `null` |
 | `redisPrefix` | `REDIS_PREFIX` in worktree `.env` | `null` |
@@ -104,7 +104,7 @@ No other CLI behaviour changes.
 
 ## Part 2 — The app (`app/`)
 
-SwiftPM package, macOS 13+, Swift 6 toolchain from Command Line Tools
+SwiftPM package, macOS 14+ (needed for `onKeyPress`), Swift 6 toolchain from Command Line Tools
 (no Xcode required).
 
 ### 2.1 Targets
@@ -145,6 +145,28 @@ Panel ~560pt wide.
   (`SMAppService.mainApp`), Quit.
 - The list refreshes when the panel opens and after every create/delete.
 
+### 2.3a Visual style — terminal
+
+Approved mockup: `.superpowers/brainstorm/*/content/terminal-style.html`.
+
+- Always dark (`#0b0f14` background, `#1f2a36` borders), regardless of system
+  appearance. Monospace everywhere: JetBrains Mono if installed, else SF Mono
+  (`.monospaced` design).
+- Palette: neon green `#39ffa0` actions/clean/prompt, amber `#ffcc66` dirty,
+  red `#ff6b6b` behind/danger, cyan `#56d4ff` Redis, violet `#c792ea` DB names,
+  muted `#6b7a8c` labels, bright `#e6edf3` primary text.
+- Header reads like a prompt: `❯ sprout ~/projects` with worktree count and
+  "refreshed Ns ago".
+- Table: `●` status dot, branch, `↑n ↓n`, `db:N`; column headers uppercase muted.
+  Detail is a key/value box (`base`, `head <hash> <subject> · <when>`, `dirty`,
+  `mysql`, `redis`).
+- Inputs are underlined fields with a blinking block caret.
+- Every create/delete log starts with the exact command:
+  `$ sprout-parallel create feature/x --project scooda --from main`.
+- Keyboard-first, with hints in the footer. List: `⏎` VS Code, `t` Warp,
+  `f` Finder, `n` new, `⌫` delete, `r` refresh, `↑↓` move row,
+  `⇧↑`/`⇧↓` move project. Forms: `⌘⏎` confirm, `esc` cancel.
+
 ### 2.4 Error handling
 
 | Situation | Behaviour |
@@ -161,7 +183,7 @@ Panel ~560pt wide.
 1. `swift build -c release` in `app/`.
 2. Assemble `app/build/Sprout.app` (`Contents/MacOS/Sprout`,
    `Contents/Info.plist` with `LSUIElement=true`, bundle id
-   `agency.manza.sprout`, `LSMinimumSystemVersion=13.0`).
+   `agency.manza.sprout`, `LSMinimumSystemVersion=14.0`).
 3. `codesign --force --sign - Sprout.app` (ad-hoc).
 4. Copy to `~/Applications/Sprout.app`.
 
