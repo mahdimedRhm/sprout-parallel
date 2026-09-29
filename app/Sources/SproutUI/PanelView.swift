@@ -1,0 +1,101 @@
+import AppKit
+import SproutCore
+import SwiftUI
+
+public struct PanelView: View {
+    @EnvironmentObject private var store: WorktreeStore
+    @FocusState private var focused: Bool
+
+    public init() {}
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            HeaderBar()
+            Hairline()
+            if store.scriptMissing {
+                ScriptMissingView()
+            } else {
+                HStack(spacing: 0) {
+                    ProjectSidebar().frame(width: 170)
+                    Hairline(vertical: true)
+                    content
+                        .padding(12)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+            }
+            if let error = store.error {
+                ErrorBanner(message: error)
+            }
+            Hairline()
+            FooterBar()
+        }
+        .frame(width: 620, height: 400)
+        .background(Theme.bg)
+        .font(Theme.mono())
+        .foregroundStyle(Theme.text)
+        .environment(\.colorScheme, .dark)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onKeyPress(action: handleKey)
+        .onChange(of: store.mode) { _, mode in
+            focused = mode == .list
+        }
+        .task {
+            focused = true
+            await store.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            focused = store.mode == .list
+            Task { await store.refresh() }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch store.mode {
+        case .list:
+            WorktreeListView()
+        case .create:
+            Text("create form — Task 7").foregroundStyle(Theme.muted)
+        case .delete:
+            Text("delete confirm — Task 7").foregroundStyle(Theme.muted)
+        }
+    }
+
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        guard store.mode == .list else { return .ignored }
+        let shift = press.modifiers.contains(.shift)
+        let worktree = store.selectedWorktree
+
+        switch press.key {
+        case .upArrow:
+            shift ? store.moveProject(by: -1) : store.moveWorktree(by: -1)
+            return .handled
+        case .downArrow:
+            shift ? store.moveProject(by: 1) : store.moveWorktree(by: 1)
+            return .handled
+        case .return:
+            if let worktree { Openers.vscode(worktree.path) }
+            return .handled
+        case .delete:
+            store.beginDelete()
+            return .handled
+        default:
+            break
+        }
+
+        switch press.characters {
+        case "t":
+            if let worktree { Openers.warp(worktree.path) }
+        case "f":
+            if let worktree { Openers.finder(worktree.path) }
+        case "n":
+            store.beginCreate()
+        case "r":
+            Task { await store.refresh() }
+        default:
+            return .ignored
+        }
+        return .handled
+    }
+}
