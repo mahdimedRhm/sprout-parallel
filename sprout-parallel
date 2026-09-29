@@ -389,6 +389,111 @@ run_setup() {
   fi
 }
 
+# ─── Status (JSON) ────────────────────────────────────────────────────────────
+
+# json_escape: escape a string for use inside a JSON string literal.
+# Escapes \ " newline tab CR; strips other ASCII control characters.
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037'
+}
+
+json_str() {
+  printf '"%s"' "$(json_escape "$1")"
+}
+
+json_str_or_null() {
+  if [[ -n "$1" ]]; then json_str "$1"; else printf 'null'; fi
+}
+
+json_int_or_null() {
+  if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi
+}
+
+# worktree_json: print one worktree as a JSON object
+#   $1: main project path
+#   $2: worktree path (trailing slash allowed)
+worktree_json() {
+  local proj_path="$1"
+  local wt="${2%/}"
+  local env_file="$wt/.env"
+
+  local branch base changes
+  branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+  base="$(git -C "$proj_path" config --get "branch.${branch}.sproutBase" 2>/dev/null || true)"
+  base="${base:-main}"
+  changes="$( { git -C "$wt" status --porcelain 2>/dev/null || true; } | wc -l | tr -d ' ')"
+
+  local base_ref="" ahead="" behind="" counts=""
+  if git -C "$wt" rev-parse --verify -q "refs/heads/$base" > /dev/null 2>&1; then
+    base_ref="refs/heads/$base"
+  elif git -C "$wt" rev-parse --verify -q "refs/remotes/origin/$base" > /dev/null 2>&1; then
+    base_ref="refs/remotes/origin/$base"
+  fi
+  if [[ -n "$base_ref" ]]; then
+    counts="$(git -C "$wt" rev-list --left-right --count "${base_ref}...HEAD" 2>/dev/null || true)"
+    if [[ -n "$counts" ]]; then
+      behind="$(echo "$counts" | awk '{print $1}')"
+      ahead="$(echo "$counts" | awk '{print $2}')"
+    fi
+  fi
+
+  local last="null" hash subject when
+  hash="$(git -C "$wt" log -1 --format=%h 2>/dev/null || true)"
+  if [[ -n "$hash" ]]; then
+    subject="$(git -C "$wt" log -1 --format=%s)"
+    when="$(git -C "$wt" log -1 --format=%cr)"
+    last="{\"hash\":$(json_str "$hash"),\"subject\":$(json_str "$subject"),\"when\":$(json_str "$when")}"
+  fi
+
+  local mysql_db="" redis_db="" redis_prefix=""
+  if [[ -f "$env_file" ]]; then
+    mysql_db="$(parse_env_value DB_DATABASE "$env_file")"
+    redis_db="$(parse_env_value REDIS_DB "$env_file")"
+    redis_prefix="$(parse_env_value REDIS_PREFIX "$env_file")"
+  fi
+
+  printf '{"branch":%s,"folder":%s,"path":%s,"base":%s,"changes":%s,"ahead":%s,"behind":%s,"lastCommit":%s,"mysqlDb":%s,"redisDb":%s,"redisPrefix":%s}' \
+    "$(json_str "$branch")" \
+    "$(json_str "$(basename "$wt")")" \
+    "$(json_str "$wt")" \
+    "$(json_str "$base")" \
+    "${changes:-0}" \
+    "$(json_int_or_null "$ahead")" \
+    "$(json_int_or_null "$behind")" \
+    "$last" \
+    "$(json_str_or_null "$mysql_db")" \
+    "$(json_int_or_null "$redis_db")" \
+    "$(json_str_or_null "$redis_prefix")"
+}
+
+# project_json: print one project (with branches and worktrees) as JSON
+#   $1: project name  $2: project path
+project_json() {
+  local name="$1"
+  local path="$2"
+
+  local branches="" b
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    branches+="${branches:+,}$(json_str "$b")"
+  done < <(git -C "$path" for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | LC_ALL=C sort)
+
+  local worktrees="" entry
+  for entry in "$SPROUT_PROJECTS_ROOT/${name}-worktrees"/*/; do
+    [[ -d "${entry}.git" || -f "${entry}.git" ]] || continue
+    worktrees+="${worktrees:+,}$(worktree_json "$path" "$entry")"
+  done
+
+  printf '{"name":%s,"path":%s,"branches":[%s],"worktrees":[%s]}' \
+    "$(json_str "$name")" "$(json_str "$path")" "$branches" "$worktrees"
+}
+
 # ─── Commands ─────────────────────────────────────────────────────────────────
 
 cmd_create() {
@@ -594,6 +699,48 @@ cmd_list() {
   printf '%s\n' "${lines[@]}"
 }
 
+cmd_status() {
+  local json=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)
+        json=true
+        shift
+        ;;
+      *)
+        die "Unknown option: $1. Run '$SCRIPT_NAME help status' for usage."
+        ;;
+    esac
+  done
+
+  [[ "$json" == true ]] \
+    || die "status currently requires --json. Run '$SCRIPT_NAME help status' for usage."
+  [[ -d "$SPROUT_PROJECTS_ROOT" ]] \
+    || die "Projects root '$SPROUT_PROJECTS_ROOT' does not exist."
+
+  local with="" without="" dir name project
+  for dir in "$SPROUT_PROJECTS_ROOT"/*/; do
+    dir="${dir%/}"
+    name="$(basename "$dir")"
+    [[ "$name" == *-worktrees ]] && continue
+    [[ -d "$dir/.git" || -f "$dir/.git" ]] || continue
+
+    project="$(project_json "$name" "$dir")"
+    if [[ "$project" == *'"worktrees":[]}' ]]; then
+      without+="${without:+,}$project"
+    else
+      with+="${with:+,}$project"
+    fi
+  done
+
+  local all="$with"
+  if [[ -n "$without" ]]; then
+    all+="${all:+,}$without"
+  fi
+  printf '{"projects":[%s]}\n' "$all"
+}
+
 cmd_help() {
   local topic="${1:-}"
 
@@ -689,6 +836,22 @@ EXIT CODES:
   1  Project not found
 EOF
       ;;
+    status)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME status --json
+
+  Prints every project under \$SPROUT_PROJECTS_ROOT and its worktrees as one
+  line of JSON. Used by the Sprout menu bar app.
+
+  Per worktree: branch, folder, path, base, changes, ahead, behind,
+  lastCommit {hash, subject, when}, mysqlDb, redisDb, redisPrefix.
+  Unknown values are null. Projects with worktrees are listed first.
+
+EXIT CODES:
+  0  Success
+  1  --json missing, or projects root not found
+EOF
+      ;;
     ""|help)
       cat <<EOF
 $SCRIPT_NAME — git worktree manager
@@ -700,6 +863,7 @@ COMMANDS:
   create <branch>   Create a new branch and worktree
   delete <branch>   Remove a worktree, its git registration, database, and Redis keys
   list              List all worktrees for a project
+  status --json     Print all projects and worktrees as JSON
   help [command]    Show help for a specific command
 
 GLOBAL OPTIONS:
@@ -730,10 +894,11 @@ For command-specific help:
   $SCRIPT_NAME help create
   $SCRIPT_NAME help delete
   $SCRIPT_NAME help list
+  $SCRIPT_NAME help status
 EOF
       ;;
     *)
-      die "Unknown help topic: '$topic'. Available: create, delete, list"
+      die "Unknown help topic: '$topic'. Available: create, delete, list, status"
       ;;
   esac
 }
@@ -748,6 +913,7 @@ main() {
     create)    cmd_create "$@" ;;
     delete)    cmd_delete "$@" ;;
     list)      cmd_list   "$@" ;;
+    status)    cmd_status "$@" ;;
     help)      cmd_help   "$@" ;;
     --help|-h) cmd_help ;;
     *)
