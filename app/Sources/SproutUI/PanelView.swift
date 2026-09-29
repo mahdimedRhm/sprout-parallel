@@ -56,9 +56,11 @@ public struct PanelView: View {
         case .list:
             WorktreeListView()
         case .create:
-            Text("create form — Task 7").foregroundStyle(Theme.muted)
-        case .delete:
-            Text("delete confirm — Task 7").foregroundStyle(Theme.muted)
+            if let project = store.selectedProject {
+                CreateForm(project: project)
+            }
+        case .delete(let worktree):
+            DeleteConfirm(worktree: worktree)
         }
     }
 

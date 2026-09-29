@@ -85,3 +85,35 @@ let erroring = await makeStore { _ in
 failRefresh = true
 await erroring.refresh()
 render("refresh-error", erroring)
+
+let createOK: (String) -> ShellResult = { command in
+    command.contains(" create ")
+        ? ShellResult(exitCode: 0, stdout: """
+            Created worktree for branch 'feature-invoices'
+            Running setup in /Users/mehdi/projects/scooda-worktrees/feature-invoices ...
+              → Copying .env from main project
+              → Creating database 'scooda_feature_invoices' (clone of 'scooda')
+              Warning: mysqldump not found — database created but not populated.
+              → Updated .env: REDIS_DB=5, REDIS_CACHE_DB=5
+            """)
+        : ShellResult(exitCode: 0, stdout: fixture)
+}
+
+let creating = await makeStore(createOK)
+creating.beginCreate()
+render("create-empty", creating)
+await creating.create(branch: "feature/invoices", base: "main", runSetup: true)
+render("create-done", creating)
+
+let createFail = await makeStore { command in
+    command.contains(" create ")
+        ? ShellResult(exitCode: 1, stderr: "Error: Branch 'feature/payments-v2' already exists in 'scooda'.")
+        : ShellResult(exitCode: 0, stdout: fixture)
+}
+createFail.beginCreate()
+await createFail.create(branch: "feature/payments-v2", base: "main", runSetup: true)
+render("create-failed", createFail)
+
+let deleting = await makeStore(ok)
+deleting.beginDelete()
+render("delete-dirty", deleting)
