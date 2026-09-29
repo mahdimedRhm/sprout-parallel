@@ -185,12 +185,14 @@ struct FooterBar: View {
         case .list:
             [Hint(key: "⏎", label: "code", primary: true), Hint(key: "t", label: "warp"),
              Hint(key: "f", label: "finder"), Hint(key: "n", label: "new"),
-             Hint(key: "⌫", label: "delete"), Hint(key: "r", label: "refresh"),
-             Hint(key: "↑↓", label: "move")]
+             Hint(key: "⌫", label: "delete"), Hint(key: "⇧X", label: "clear all"),
+             Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move")]
         case .create:
             [Hint(key: "⌘⏎", label: "create", primary: true), Hint(key: "esc", label: "back")]
         case .delete:
             [Hint(key: "⌘⏎", label: "delete", primary: true), Hint(key: "esc", label: "back")]
+        case .clear:
+            [Hint(key: "⌘⏎", label: "clear all", primary: true), Hint(key: "esc", label: "back")]
         }
     }
 }

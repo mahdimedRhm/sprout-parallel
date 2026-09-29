@@ -8,6 +8,7 @@ public final class WorktreeStore: ObservableObject {
         case list
         case create
         case delete(Worktree)
+        case clear(Project)
     }
 
     public enum Operation: Equatable {
@@ -125,6 +126,12 @@ public final class WorktreeStore: ObservableObject {
         mode = .delete(worktree)
     }
 
+    public func beginClear() {
+        guard !isBusy, let project = selectedProject, !project.worktrees.isEmpty else { return }
+        resetOperation()
+        mode = .clear(project)
+    }
+
     public func backToList() {
         guard !isBusy else { return }
         resetOperation()
@@ -158,6 +165,14 @@ public final class WorktreeStore: ObservableObject {
         if case .succeeded = outcome, selectedWorktreePath == worktree.path {
             selectedWorktreePath = nil
         }
+        await loadStatus()
+        operation = outcome
+    }
+
+    public func clear(_ project: Project, force: Bool, dropData: Bool) async {
+        guard !isBusy else { return }
+        let command = SproutCLI.clearCommand(project: project.name, force: force, keepData: !dropData)
+        let outcome = await perform(command)
         await loadStatus()
         operation = outcome
     }

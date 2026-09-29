@@ -28,6 +28,13 @@ func cliChecks() async {
         SproutCLI.deleteCommand(project: "scooda", folder: "feature-x", force: true, keepData: true),
         "sprout-parallel delete feature-x --project scooda --force --keep-db", "delete both flags")
 
+    checkEqual(
+        SproutCLI.clearCommand(project: "scooda", force: false, keepData: false),
+        "sprout-parallel clear --project scooda", "clear command")
+    checkEqual(
+        SproutCLI.clearCommand(project: "my proj", force: true, keepData: true),
+        "sprout-parallel clear --project 'my proj' --force --keep-db", "clear flags and quoting")
+
     checkEqual(SproutCLI.folderName(for: "feature/my-thing"), "feature-my-thing", "folder name")
     checkEqual(SproutCLI.folderName(for: "/x/"), "x", "folder name trims edge dashes")
 

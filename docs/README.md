@@ -119,6 +119,36 @@ Deleted worktree 'feature-my-thing'
 
 ---
 
+### `clear` — Delete every worktree of a project
+
+```
+sprout-parallel clear [--project <name>] [--force] [--keep-db]
+```
+
+Runs `delete` on each of the project's worktrees. Worktrees with uncommitted
+changes are skipped unless `--force` is given, and a failing delete doesn't stop
+the others. Branches are kept.
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--project <name>` | No | Auto-detected | Project name. |
+| `--force` | No | off | Also delete worktrees with uncommitted changes. |
+| `--keep-db` | No | off | Don't drop databases or clear Redis keys. |
+
+**Output:**
+
+```
+Skipped 'feature-wip' (uncommitted changes — use --force to delete it)
+Deleted worktree 'feature-my-thing'
+  ...
+
+cleared 1 · skipped 1 · failed 0
+```
+
+Exits 1 if any delete failed.
+
+---
+
 ### `list` — List worktrees
 
 ```
@@ -241,6 +271,7 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 | `f` | reveal in Finder |
 | `n` | new worktree in the selected project |
 | `⌫` | delete the selected worktree |
+| `⇧X` | clear all worktrees of the selected project |
 | `r` | refresh |
 | `⌘⏎` / `esc` | confirm / back (in forms) |
 | `esc` / `⌘W` | hide the window (in the list) |
@@ -252,4 +283,5 @@ cd app
 swift run SproutCoreChecks   # logic checks (no Xcode needed)
 swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
 bash ../tests/status_test.sh # status --json tests
+bash ../tests/clear_test.sh  # clear tests
 ```

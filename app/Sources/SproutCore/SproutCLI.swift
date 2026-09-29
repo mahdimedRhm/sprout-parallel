@@ -32,6 +32,14 @@ public struct SproutCLI {
 
     /// `folder` is the worktree folder name; the script's safe_name() maps it
     /// to itself, so this also works for detached-HEAD worktrees.
+    /// Deletes every worktree of `project`; dirty ones are skipped unless `force`.
+    public static func clearCommand(project: String, force: Bool, keepData: Bool) -> String {
+        var parts = ["sprout-parallel", "clear", "--project", shellQuote(project)]
+        if force { parts.append("--force") }
+        if keepData { parts.append("--keep-db") }
+        return parts.joined(separator: " ")
+    }
+
     public static func deleteCommand(project: String, folder: String, force: Bool, keepData: Bool) -> String {
         var parts = ["sprout-parallel", "delete", shellQuote(folder), "--project", shellQuote(project)]
         if force { parts.append("--force") }

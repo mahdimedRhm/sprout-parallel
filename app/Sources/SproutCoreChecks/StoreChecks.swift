@@ -8,7 +8,59 @@ func storeChecks() async {
     await deleteChecks()
     await deleteFailureChecks()
     await busyDuringReloadChecks()
+    await clearChecks()
     await navigationChecks()
+}
+
+@MainActor
+private func clearChecks() async {
+    var branches = ["feature/a", "feature/b"]
+    var clearResult = ShellResult(exitCode: 0, stdout: "Deleted worktree 'feature-a'\n\ncleared 2 · skipped 0 · failed 0\n")
+    let shell = FakeShell { command in
+        if command.contains(" clear ") {
+            if clearResult.exitCode == 0 { branches = [] }
+            return clearResult
+        }
+        return ShellResult(exitCode: 0, stdout: statusJSON(branches))
+    }
+    let store = WorktreeStore(cli: SproutCLI(shell: shell))
+    await store.refresh()
+
+    store.beginClear()
+    guard case .clear(let project) = store.mode else {
+        check(false, "beginClear enters clear mode")
+        return
+    }
+    checkEqual(project.name, "scooda", "clear targets the selected project")
+
+    await store.clear(project, force: false, dropData: true)
+    checkEqual(store.log.first, "$ sprout-parallel clear --project scooda", "clear log starts with command")
+    check(store.log.contains("cleared 2 · skipped 0 · failed 0"), "clear streams the summary")
+    checkEqual(store.operation, .succeeded, "clear succeeded")
+    checkEqual(store.worktreeCount, 0, "list refreshed after clear")
+    checkEqual(store.selectedWorktree, nil, "no worktree selected after clear")
+    checkEqual(shell.commands.last, "sprout-parallel status --json", "refreshes after clear")
+
+    store.backToList()
+    branches = ["feature/a", "feature/locked"]
+    await store.refresh()
+    clearResult = ShellResult(
+        exitCode: 1,
+        stdout: "cleared 1 · skipped 0 · failed 1\n",
+        stderr: "Error: Failed to delete 1 worktree(s) in 'scooda'.\n")
+    store.beginClear()
+    if case .clear(let again) = store.mode {
+        await store.clear(again, force: true, dropData: false)
+    }
+    check(shell.commands.contains("sprout-parallel clear --project scooda --force --keep-db"),
+          "clear passes --force and --keep-db")
+    checkEqual(store.operation, .failed("Error: Failed to delete 1 worktree(s) in 'scooda'."), "clear failure shown")
+    check(store.log.contains("Error: Failed to delete 1 worktree(s) in 'scooda'."), "clear failure keeps Error: line in log")
+
+    store.backToList()
+    store.selectProject("prayercal")
+    store.beginClear()
+    checkEqual(store.mode, .list, "beginClear ignored for a project without worktrees")
 }
 
 @MainActor

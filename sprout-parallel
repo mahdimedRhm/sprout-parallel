@@ -645,6 +645,77 @@ cmd_delete() {
   echo "  Path    : $worktree_path"
 }
 
+cmd_clear() {
+  local project_arg=""
+  local force=false
+  local keep_db=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project)
+        [[ -n "${2:-}" ]] || die "Missing value for --project."
+        project_arg="$2"
+        shift 2
+        ;;
+      --force)
+        force=true
+        shift
+        ;;
+      --keep-db)
+        keep_db=true
+        shift
+        ;;
+      -*)
+        die "Unknown option: $1. Run '$SCRIPT_NAME help clear' for usage."
+        ;;
+      *)
+        die "Unexpected argument: $1. Run '$SCRIPT_NAME help clear' for usage."
+        ;;
+    esac
+  done
+
+  resolve_project "$project_arg"
+  local proj_name="$REPLY_PROJECT_NAME"
+
+  local flags=""
+  [[ "$force" == true ]] && flags+=" --force"
+  [[ "$keep_db" == true ]] && flags+=" --keep-db"
+
+  local cleared=0 skipped=0 failed=0 found=false entry folder dirty
+  for entry in "$SPROUT_PROJECTS_ROOT/${proj_name}-worktrees"/*/; do
+    [[ -d "${entry}.git" || -f "${entry}.git" ]] || continue
+    found=true
+    folder="$(basename "$entry")"
+
+    if [[ "$force" == false ]]; then
+      dirty="$(git -C "$entry" status --porcelain 2>/dev/null || true)"
+      if [[ -n "$dirty" ]]; then
+        echo "Skipped '$folder' (uncommitted changes — use --force to delete it)"
+        skipped=$((skipped + 1))
+        continue
+      fi
+    fi
+
+    # Subshell: a failing delete exits only its own shell, so the rest still run
+    # shellcheck disable=SC2086
+    if ( cmd_delete "$folder" --project "$proj_name" $flags ); then
+      cleared=$((cleared + 1))
+    else
+      echo "Failed to delete '$folder'"
+      failed=$((failed + 1))
+    fi
+  done
+
+  if [[ "$found" == false ]]; then
+    echo "No worktrees to clear in project '$proj_name'."
+    return 0
+  fi
+
+  echo ""
+  echo "cleared $cleared · skipped $skipped · failed $failed"
+  [[ "$failed" -eq 0 ]] || die "Failed to delete $failed worktree(s) in '$proj_name'."
+}
+
 cmd_list() {
   local project_arg=""
 
@@ -792,6 +863,28 @@ EXIT CODES:
   2  git command failed
 EOF
       ;;
+    clear)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME clear [options]
+
+  Deletes every worktree of a project, one by one, as 'delete' would.
+  Worktrees with uncommitted changes are skipped unless --force is given.
+  A failing delete does not stop the others. Branches are kept.
+
+OPTIONS:
+  --project <name>     Target project. Auto-detected if inside a project.
+  --force              Also delete worktrees with uncommitted changes.
+  --keep-db            Skip dropping databases and clearing Redis keys.
+
+EXAMPLES:
+  $SCRIPT_NAME clear --project scooda
+  $SCRIPT_NAME clear --project scooda --force --keep-db
+
+EXIT CODES:
+  0  Every worktree was deleted or skipped
+  1  At least one delete failed, or project not found
+EOF
+      ;;
     delete)
       cat <<EOF
 COMMAND: $SCRIPT_NAME delete <branch-name> [options]
@@ -869,6 +962,7 @@ USAGE:
 COMMANDS:
   create <branch>   Create a new branch and worktree
   delete <branch>   Remove a worktree, its git registration, database, and Redis keys
+  clear             Remove every worktree of a project
   list              List all worktrees for a project
   status --json     Print all projects and worktrees as JSON
   help [command]    Show help for a specific command
@@ -902,10 +996,11 @@ For command-specific help:
   $SCRIPT_NAME help delete
   $SCRIPT_NAME help list
   $SCRIPT_NAME help status
+  $SCRIPT_NAME help clear
 EOF
       ;;
     *)
-      die "Unknown help topic: '$topic'. Available: create, delete, list, status"
+      die "Unknown help topic: '$topic'. Available: create, delete, clear, list, status"
       ;;
   esac
 }
@@ -919,6 +1014,7 @@ main() {
   case "$cmd" in
     create)    cmd_create "$@" ;;
     delete)    cmd_delete "$@" ;;
+    clear)     cmd_clear  "$@" ;;
     list)      cmd_list   "$@" ;;
     status)    cmd_status "$@" ;;
     help)      cmd_help   "$@" ;;

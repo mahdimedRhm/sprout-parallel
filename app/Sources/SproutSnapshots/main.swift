@@ -117,3 +117,25 @@ render("create-failed", createFail)
 let deleting = await makeStore(ok)
 deleting.beginDelete()
 render("delete-dirty", deleting)
+
+let clearing = await makeStore(ok)
+clearing.beginClear()
+render("clear-confirm", clearing)
+
+let clearFail = await makeStore { command in
+    command.contains(" clear ")
+        ? ShellResult(
+            exitCode: 1,
+            stdout: """
+                Skipped 'feature-payments-v2' (uncommitted changes — use --force to delete it)
+                Deleted worktree 'fix-TICKET-123'
+
+                cleared 1 · skipped 1 · failed 0
+                """)
+        : ShellResult(exitCode: 0, stdout: fixture)
+}
+clearFail.beginClear()
+if case .clear(let project) = clearFail.mode {
+    await clearFail.clear(project, force: false, dropData: true)
+}
+render("clear-done", clearFail)

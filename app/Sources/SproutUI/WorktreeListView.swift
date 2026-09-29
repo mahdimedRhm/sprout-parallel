@@ -17,11 +17,13 @@ struct WorktreeListView: View {
                 // the rows scroll and the detail stays pinned below them.
                 ViewThatFits(in: .vertical) {
                     VStack(alignment: .leading, spacing: 0) {
+                        clearAllBar(project)
                         WorktreeRow.header
                         rows(project)
                         detail
                     }
                     VStack(alignment: .leading, spacing: 0) {
+                        clearAllBar(project)
                         WorktreeRow.header
                         ScrollViewReader { proxy in
                             ScrollView { rows(project) }
@@ -37,6 +39,17 @@ struct WorktreeListView: View {
         } else {
             Text(store.isRefreshing ? "loading…" : "no projects found").foregroundStyle(Theme.muted)
         }
+    }
+
+    private func clearAllBar(_ project: Project) -> some View {
+        HStack {
+            Text("\(project.worktrees.count) worktree\(project.worktrees.count == 1 ? "" : "s") in \(project.name)")
+                .foregroundStyle(Theme.muted)
+            Spacer()
+            ActionChip(key: "⇧X", label: "clear all", tint: Theme.red) { store.beginClear() }
+                .font(Theme.mono(11))
+        }
+        .padding(.bottom, 8)
     }
 
     private func rows(_ project: Project) -> some View {

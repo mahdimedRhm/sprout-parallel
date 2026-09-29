@@ -65,6 +65,8 @@ public struct PanelView: View {
             }
         case .delete(let worktree):
             DeleteConfirm(worktree: worktree)
+        case .clear(let project):
+            ClearConfirm(project: project)
         }
     }
 
@@ -101,6 +103,8 @@ public struct PanelView: View {
             if let worktree { Openers.finder(worktree.path) }
         case "n":
             store.beginCreate()
+        case "X":
+            store.beginClear()
         case "r":
             Task { await store.refresh() }
         default:
