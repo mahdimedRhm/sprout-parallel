@@ -16,3 +16,10 @@
 
 # BATS test output
 tests/output/
+
+# Brainstorm companion
+.superpowers/
+
+# Sprout app build output
+app/.build/
+app/build/
