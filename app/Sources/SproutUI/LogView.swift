@@ -23,9 +23,11 @@ struct LogView: View {
         }
         .font(Theme.mono(11))
         .padding(8)
-        .frame(maxWidth: .infinity, maxHeight: 150, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.logBg))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.border))
+        // Win the free space in the forms over their trailing Spacer.
+        .layoutPriority(1)
     }
 
     @ViewBuilder private var status: some View {

@@ -13,31 +13,48 @@ struct WorktreeListView: View {
                     ActionChip(key: "n", label: "create one", tint: Theme.green) { store.beginCreate() }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    WorktreeRow.header
-                    ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: 1) {
-                            ForEach(project.worktrees) { worktree in
-                                WorktreeRow(worktree: worktree, selected: worktree.path == store.selectedWorktreePath)
-                                    .id(worktree.path)
-                                    .onTapGesture(count: 2) { Openers.vscode(worktree.path) }
-                                    .onTapGesture { store.selectedWorktreePath = worktree.path }
-                            }
+                // Rows sit directly above the detail when they fit; otherwise
+                // the rows scroll and the detail stays pinned below them.
+                ViewThatFits(in: .vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        WorktreeRow.header
+                        rows(project)
+                        detail
+                    }
+                    VStack(alignment: .leading, spacing: 0) {
+                        WorktreeRow.header
+                        ScrollViewReader { proxy in
+                            ScrollView { rows(project) }
+                                .onChange(of: store.selectedWorktreePath) { _, path in
+                                    if let path { proxy.scrollTo(path) }
+                                }
                         }
-                    }
-                    .onChange(of: store.selectedWorktreePath) { _, path in
-                        if let path { proxy.scrollTo(path) }
-                    }
-                    }
-                    .frame(maxHeight: 120)
-                    if let worktree = store.selectedWorktree {
-                        WorktreeDetail(worktree: worktree).padding(.top, 10)
+                        .frame(maxHeight: .infinity)
+                        detail
                     }
                 }
             }
         } else {
             Text(store.isRefreshing ? "loading…" : "no projects found").foregroundStyle(Theme.muted)
+        }
+    }
+
+    private func rows(_ project: Project) -> some View {
+        VStack(spacing: 1) {
+            ForEach(project.worktrees) { worktree in
+                WorktreeRow(worktree: worktree, selected: worktree.path == store.selectedWorktreePath)
+                    .id(worktree.path)
+                    .onTapGesture(count: 2) { Openers.vscode(worktree.path) }
+                    .onTapGesture { store.selectedWorktreePath = worktree.path }
+            }
+        }
+    }
+
+    @ViewBuilder private var detail: some View {
+        if let worktree = store.selectedWorktree {
+            WorktreeDetail(worktree: worktree)
+                .padding(.top, 10)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

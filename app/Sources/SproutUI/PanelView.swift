@@ -5,8 +5,20 @@ import SwiftUI
 public struct PanelView: View {
     @EnvironmentObject private var store: WorktreeStore
     @FocusState private var focused: Bool
+    @State private var size = PanelView.preferredSize()
 
     public init() {}
+
+    /// Half the width and the full usable height of the screen the panel
+    /// opens on (the one under the mouse, since the leaf was just clicked).
+    static func preferredSize() -> CGSize {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return CGSize(width: 620, height: 400) }
+        return CGSize(
+            width: max(620, (visible.width / 2).rounded()),
+            height: max(400, visible.height - 24))
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -29,7 +41,7 @@ public struct PanelView: View {
             Hairline()
             FooterBar()
         }
-        .frame(width: 620, height: 400)
+        .frame(width: size.width, height: size.height)
         .background(Theme.bg)
         .font(Theme.mono())
         .foregroundStyle(Theme.text)
@@ -46,6 +58,7 @@ public struct PanelView: View {
             await store.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            size = Self.preferredSize()
             focused = store.mode == .list
             Task { await store.refresh() }
         }
