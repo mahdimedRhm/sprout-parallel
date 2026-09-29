@@ -209,3 +209,43 @@ sprout-parallel delete feature/user-profile
 | `0` | Success |
 | `1` | User error (bad arguments, entity not found, pre-condition not met) |
 | `2` | Internal / git failure |
+
+---
+
+## Sprout menu bar app
+
+A terminal-styled macOS menu bar app for viewing and managing worktrees across
+every project under `$SPROUT_PROJECTS_ROOT`. It drives the `sprout-parallel`
+CLI (`status --json`, `create`, `delete`), so both always agree.
+
+### Install
+
+Requires macOS 14+ and the Xcode Command Line Tools (`xcode-select --install`).
+
+```bash
+bash install.sh          # the app calls sprout-parallel from your login shell
+bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
+```
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `↑` `↓` | select worktree |
+| `⇧↑` `⇧↓` | select project |
+| `⏎` | open in VS Code |
+| `t` | open in Warp |
+| `f` | reveal in Finder |
+| `n` | new worktree in the selected project |
+| `⌫` | delete the selected worktree |
+| `r` | refresh |
+| `⌘⏎` / `esc` | confirm / back (in forms) |
+
+### Development
+
+```bash
+cd app
+swift run SproutCoreChecks   # logic checks (no Xcode needed)
+swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
+bash ../tests/status_test.sh # status --json tests
+```

@@ -164,6 +164,7 @@ struct FooterBar: View {
                 KeyHint(key: hint.key, label: hint.label, tint: hint.primary ? Theme.green : Theme.muted)
             }
             Spacer()
+            LoginItemToggle()
             Button("quit") { NSApp.terminate(nil) }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.muted)
