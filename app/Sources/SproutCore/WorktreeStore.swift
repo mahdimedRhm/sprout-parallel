@@ -141,26 +141,30 @@ public final class WorktreeStore: ObservableObject {
     public func create(branch: String, base: String, runSetup: Bool) async {
         guard !isBusy, let project = selectedProject else { return }
         let command = SproutCLI.createCommand(project: project.name, branch: branch, base: base, runSetup: runSetup)
-        let succeeded = await perform(command)
+        let outcome = await perform(command)
         await loadStatus()
-        if succeeded,
+        if case .succeeded = outcome,
            let created = selectedProject?.worktrees.first(where: { $0.branch == branch }) {
             selectedWorktreePath = created.path
         }
+        operation = outcome
     }
 
     public func delete(_ worktree: Worktree, force: Bool, dropData: Bool) async {
         guard !isBusy, let project = selectedProject else { return }
         let command = SproutCLI.deleteCommand(
             project: project.name, folder: worktree.folder, force: force, keepData: !dropData)
-        let succeeded = await perform(command)
-        if succeeded, selectedWorktreePath == worktree.path {
+        let outcome = await perform(command)
+        if case .succeeded = outcome, selectedWorktreePath == worktree.path {
             selectedWorktreePath = nil
         }
         await loadStatus()
+        operation = outcome
     }
 
-    private func perform(_ command: String) async -> Bool {
+    /// Runs the command and returns its outcome without publishing it: the
+    /// store stays `.running` (busy) until the caller has reloaded status.
+    private func perform(_ command: String) async -> Operation {
         log = ["$ " + command]
         operation = .running
         do {
@@ -170,12 +174,10 @@ public final class WorktreeStore: ObservableObject {
                 }
             }
             await drainMainQueue()
-            operation = .succeeded
-            return true
+            return .succeeded
         } catch {
             await drainMainQueue()
-            operation = .failed((error as? CLIError)?.message ?? error.localizedDescription)
-            return false
+            return .failed((error as? CLIError)?.message ?? error.localizedDescription)
         }
     }
 

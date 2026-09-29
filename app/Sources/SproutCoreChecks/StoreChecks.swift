@@ -6,6 +6,8 @@ func storeChecks() async {
     await refreshChecks()
     await createChecks()
     await deleteChecks()
+    await deleteFailureChecks()
+    await busyDuringReloadChecks()
     await navigationChecks()
 }
 
@@ -74,6 +76,8 @@ private func createChecks() async {
     await store.create(branch: "feature/taken", base: "main", runSetup: false)
     checkEqual(store.operation, .failed("Error: Branch 'feature/taken' already exists in 'scooda'."), "create failure shown")
     checkEqual(shell.commands.last, "sprout-parallel status --json", "refreshes after failed create")
+    check(store.log.contains("Error: Branch 'feature/taken' already exists in 'scooda'."),
+          "failed create keeps Error: line in log")
 
     let slow = FakeShell { command in
         command.contains(" create ") ? ShellResult(exitCode: 0, stdout: "ok")
@@ -114,6 +118,56 @@ private func deleteChecks() async {
     checkEqual(store.operation, .succeeded, "delete succeeded")
     checkEqual(store.selectedWorktree?.branch, "feature/b", "selection moves to remaining worktree")
     checkEqual(store.worktreeCount, 1, "list refreshed after delete")
+}
+
+@MainActor
+private func deleteFailureChecks() async {
+    let message = "Error: Worktree 'feature-a' has uncommitted changes. Use --force to delete anyway."
+    let shell = FakeShell { command in
+        command.contains(" delete ")
+            ? ShellResult(exitCode: 1, stderr: message + "\n")
+            : ShellResult(exitCode: 0, stdout: statusJSON(["feature/a", "feature/b"]))
+    }
+    let store = WorktreeStore(cli: SproutCLI(shell: shell))
+    await store.refresh()
+    store.beginDelete()
+    guard case .delete(let worktree) = store.mode else {
+        check(false, "beginDelete enters delete mode (failure case)")
+        return
+    }
+    await store.delete(worktree, force: false, dropData: false)
+    checkEqual(store.operation, .failed(message), "delete failure shown")
+    check(store.log.contains(message), "failed delete keeps Error: line in log")
+    checkEqual(shell.commands.last, "sprout-parallel status --json", "refreshes after failed delete")
+    checkEqual(store.worktreeCount, 2, "failed delete leaves worktrees")
+}
+
+/// The store must stay busy through the post-operation reload.
+@MainActor
+private func busyDuringReloadChecks() async {
+    let shell = FakeShell { command in
+        command.contains(" create ") ? ShellResult(exitCode: 0, stdout: "ok")
+                                     : ShellResult(exitCode: 0, stdout: statusJSON(["feature/a"]))
+    }
+    let store = WorktreeStore(cli: SproutCLI(shell: shell))
+    await store.refresh()
+    shell.delayNanos = 100_000_000
+    store.beginCreate()
+    let task = Task { @MainActor in
+        await store.create(branch: "feature/new", base: "main", runSetup: true)
+    }
+    // create command finishes at ~100ms; the reload then runs until ~200ms.
+    try? await Task.sleep(nanoseconds: 150_000_000)
+    check(shell.commands.last == "sprout-parallel status --json", "post-op reload is in flight")
+    check(store.isBusy, "busy during post-op reload")
+    store.backToList()
+    checkEqual(store.mode, .create, "backToList ignored during post-op reload")
+    check(!store.log.isEmpty, "log kept during post-op reload")
+    store.beginDelete()
+    checkEqual(store.mode, .create, "beginDelete ignored during post-op reload")
+    await task.value
+    check(!store.isBusy, "not busy after reload finishes")
+    checkEqual(store.operation, .succeeded, "operation succeeded after reload")
 }
 
 @MainActor
