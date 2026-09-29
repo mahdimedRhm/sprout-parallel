@@ -63,10 +63,13 @@ public struct SproutCLI {
     public func status() async throws -> Status {
         let result = await shell.run(Self.statusCommand) { _ in }
         try Self.throwIfFailed(result)
-        // Login shells may print banners first; the JSON is the last line starting with "{".
-        guard let json = result.stdout.split(separator: "\n").last(where: { $0.hasPrefix("{") }) else {
+        // Interactive login shells may print banners or escape sequences, even on the
+        // same line: take the last line containing the JSON start and cut from there.
+        guard let line = result.stdout.split(separator: "\n").last(where: { $0.contains("{\"projects\":") }),
+              let start = line.range(of: "{\"projects\":") else {
             throw CLIError.badOutput("no JSON in status output")
         }
+        let json = line[start.lowerBound...]
         do {
             return try Status.decode(Data(json.utf8))
         } catch {

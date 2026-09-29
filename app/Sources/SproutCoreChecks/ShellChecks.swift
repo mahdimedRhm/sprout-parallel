@@ -17,6 +17,9 @@ func shellChecks() async {
     checkEqual(result.stderr, "oops\n", "stderr collected separately")
     checkEqual(Set(box.lines), Set(["one", "two", "oops", "tail"]), "every line streamed")
 
+    let interactive = await LoginShell().run("[[ -o interactive ]] && echo interactive") { _ in }
+    check(interactive.stdout.contains("interactive"), "login shell is interactive so ~/.zshrc is read")
+
     let missing = await LoginShell().run("definitely-not-a-command-xyz") { _ in }
     checkEqual(missing.exitCode, 127, "missing command exits 127")
 }

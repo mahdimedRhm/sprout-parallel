@@ -109,6 +109,13 @@ assert_eq "$(git -C "$ROOT/alpha" config --get branch.feature/dev.sproutBase || 
 assert_eq "$(q "W('feature-dev')['base']")" "develop" "status reports recorded base"
 assert_eq "$(q "(W('feature-dev')['ahead'], W('feature-dev')['behind'])")" "(0, 0)" "sync against recorded base"
 
+# ─── leading-zero numbers are normalised ─────────────────────────────────────
+
+printf 'REDIS_DB=03\n' > "$ROOT/alpha-worktrees/feature-dev/.env"
+"$SP" status --json > "$OUT"
+assert_eq "$(q "'parsed'")" "parsed" "leading-zero REDIS_DB still yields valid JSON"
+assert_eq "$(q "W('feature-dev')['redisDb']")" "3" "leading-zero REDIS_DB normalised to 3"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
 echo

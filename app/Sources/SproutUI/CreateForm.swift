@@ -28,7 +28,6 @@ struct CreateForm: View {
                     .disabled(locked)
                     .padding(.bottom, 2)
                     .overlay(alignment: .bottom) { Rectangle().fill(Theme.green).frame(height: 1) }
-                    .onSubmit(submit)
             }
             KV("from") {
                 Picker("", selection: $base) {
@@ -74,7 +73,9 @@ struct CreateForm: View {
             .font(Theme.mono(11))
         }
         .onAppear {
-            base = project.branches.contains("main") ? "main" : (project.branches.first ?? "main")
+            if !project.branches.contains(base) {
+                base = project.branches.contains("main") ? "main" : (project.branches.first ?? "main")
+            }
             branchFocused = true
         }
     }

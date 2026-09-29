@@ -412,7 +412,7 @@ json_str_or_null() {
 }
 
 json_int_or_null() {
-  if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi
+  if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s' "$((10#$1))"; else printf 'null'; fi
 }
 
 # worktree_json: print one worktree as a JSON object

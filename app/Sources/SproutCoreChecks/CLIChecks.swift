@@ -44,6 +44,9 @@ func cliChecks() async {
     let banner = FakeShell { _ in ShellResult(exitCode: 0, stdout: "Welcome to zsh!\n" + statusJSON(["feature/a"]) + "\n") }
     let status = try? await SproutCLI(shell: banner).status()
     checkEqual(status?.projects.first?.worktrees.first?.branch, "feature/a", "status ignores login-shell banner")
+    let escaped = FakeShell { _ in ShellResult(exitCode: 0, stdout: "\u{1B}]0;title\u{07}" + statusJSON(["feature/a"]) + "\n") }
+    let escStatus = try? await SproutCLI(shell: escaped).status()
+    checkEqual(escStatus?.projects.first?.worktrees.first?.branch, "feature/a", "status ignores escape sequence before JSON")
     checkEqual(banner.commands, ["sprout-parallel status --json"], "status runs the status command")
 
     await expectError(ShellResult(exitCode: 127, stderr: "zsh: command not found: sprout-parallel"),

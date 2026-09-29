@@ -210,7 +210,7 @@ struct ErrorBanner: View {
 struct ScriptMissingView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("✗ sprout-parallel not found on your login-shell PATH").foregroundStyle(Theme.red)
+            Text("✗ sprout-parallel not found on your shell PATH (~/.zshrc)").foregroundStyle(Theme.red)
             (Text("$ ").foregroundStyle(Theme.green) + Text("bash install.sh").foregroundStyle(Theme.bright))
             Text("then reopen this panel").foregroundStyle(Theme.muted)
         }

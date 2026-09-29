@@ -223,7 +223,7 @@ CLI (`status --json`, `create`, `delete`), so both always agree.
 Requires macOS 14+ and the Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-bash install.sh          # the app calls sprout-parallel from your login shell
+bash install.sh          # the app runs sprout-parallel via `zsh -lic`, so PATH set in ~/.zshrc applies
 bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 ```
 

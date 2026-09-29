@@ -29,8 +29,8 @@ public func shellQuote(_ s: String) -> String {
     return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
-/// Runs commands through a login shell (`zsh -lc`) so GUI launches get the
-/// user's PATH (Homebrew, ~/.local/bin, …).
+/// Runs commands through a login shell (`zsh -lic`) so GUI launches get the
+/// user's PATH, including anything set in ~/.zshrc (Homebrew, ~/.local/bin, …).
 public final class LoginShell: Shell {
     private let shellPath: String
 
@@ -42,7 +42,7 @@ public final class LoginShell: Shell {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: shellPath)
-            process.arguments = ["-lc", command]
+            process.arguments = ["-lic", command]
             process.standardInput = FileHandle.nullDevice
             let outPipe = Pipe()
             let errPipe = Pipe()
