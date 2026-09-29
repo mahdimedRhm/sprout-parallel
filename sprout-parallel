@@ -557,6 +557,9 @@ cmd_create() {
   git -C "$proj_path" worktree add -b "$branch" "$worktree_path" "$base_branch" \
     || die2 "git worktree add failed. Ensure git 2.17+ is installed."
 
+  # Remember the base so `status` can report ahead/behind against it
+  git -C "$proj_path" config "branch.${branch}.sproutBase" "$base_branch"
+
   echo "Created worktree for branch '$folder_name'"
   echo "  Project : $proj_name"
   echo "  Branch  : $branch"
@@ -769,6 +772,10 @@ SETUP (auto-detected, runs after worktree creation):
                        cache don't mix with the main project or other worktrees
   composer.json        vendor/ seeded from main project + composer dump-autoload
   package.json         node_modules/ seeded from main project + npm/yarn/pnpm install
+
+BASE TRACKING:
+  The base branch is stored in git config (branch.<name>.sproutBase) so
+  'status --json' can report commits ahead/behind it.
 
 EXAMPLES:
   $SCRIPT_NAME create feature/my-thing

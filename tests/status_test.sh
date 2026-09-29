@@ -99,6 +99,16 @@ no_json_rc=0
 "$SP" status > /dev/null 2>&1 || no_json_rc=$?
 assert_eq "$no_json_rc" "1" "status without --json exits 1"
 
+# ─── create records sproutBase ────────────────────────────────────────────────────────────
+
+"$SP" create feature/dev --project alpha --from develop --no-setup > /dev/null
+assert_eq "$(git -C "$ROOT/alpha" config --get branch.feature/dev.sproutBase || true)" "develop" \
+  "create stores base in git config"
+
+"$SP" status --json > "$OUT"
+assert_eq "$(q "W('feature-dev')['base']")" "develop" "status reports recorded base"
+assert_eq "$(q "(W('feature-dev')['ahead'], W('feature-dev')['behind'])")" "(0, 0)" "sync against recorded base"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
 echo
