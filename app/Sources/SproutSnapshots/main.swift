@@ -51,7 +51,7 @@ func makeStore(_ respond: @escaping (String) -> ShellResult) async -> WorktreeSt
 
 @MainActor
 func render(_ name: String, _ store: WorktreeStore) {
-    let renderer = ImageRenderer(content: PanelView().environmentObject(store))
+    let renderer = ImageRenderer(content: PanelView().environmentObject(store).frame(width: 900, height: 640))
     renderer.scale = 2
     guard let image = renderer.nsImage,
           let tiff = image.tiffRepresentation,

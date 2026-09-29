@@ -218,6 +218,9 @@ A terminal-styled macOS menu bar app for viewing and managing worktrees across
 every project under `$SPROUT_PROJECTS_ROOT`. It drives the `sprout-parallel`
 CLI (`status --json`, `create`, `delete`), so both always agree.
 
+Click the leaf in the menu bar to show or hide the Sprout window. Drag its
+background to move it and its edges to resize it; it remembers where you left it.
+
 ### Install
 
 Requires macOS 14+ and the Xcode Command Line Tools (`xcode-select --install`).
@@ -240,6 +243,7 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 | `⌫` | delete the selected worktree |
 | `r` | refresh |
 | `⌘⏎` / `esc` | confirm / back (in forms) |
+| `esc` / `⌘W` | hide the window (in the list) |
 
 ### Development
 

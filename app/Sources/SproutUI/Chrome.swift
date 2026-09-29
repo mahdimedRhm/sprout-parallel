@@ -165,6 +165,10 @@ struct FooterBar: View {
             }
             Spacer()
             LoginItemToggle()
+            Button("close") { NSApp.keyWindow?.orderOut(nil) }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.muted)
+                .keyboardShortcut("w")
             Button("quit") { NSApp.terminate(nil) }
                 .buttonStyle(.plain)
                 .foregroundStyle(Theme.muted)
