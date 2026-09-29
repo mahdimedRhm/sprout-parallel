@@ -39,7 +39,30 @@ db_safe_name() {
 #   $1: variable name (e.g. DB_DATABASE)
 #   $2: path to .env file
 parse_env_var() {
-  grep "^${1}=" "$2" 2>/dev/null | head -1 | cut -d= -f2-
+  { grep "^${1}=" "$2" 2>/dev/null || true; } | head -1 | cut -d= -f2-
+}
+
+# parse_env_value: like parse_env_var, but strips surrounding quotes and
+# treats Laravel's literal "null" as empty
+parse_env_value() {
+  local value
+  value="$(parse_env_var "$1" "$2")"
+  value="${value#\"}"; value="${value%\"}"
+  value="${value#\'}"; value="${value%\'}"
+  [[ "$value" == "null" ]] && value=""
+  echo "$value"
+}
+
+# set_env_var: replace KEY=... in a .env file, or append it if missing
+#   $1: variable name  $2: value  $3: path to .env file
+set_env_var() {
+  local key="$1" value="$2" file="$3"
+  if grep -q "^${key}=" "$file"; then
+    sed -i '' "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    [[ -s "$file" && -n "$(tail -c 1 "$file")" ]] && echo >> "$file"
+    echo "${key}=${value}" >> "$file"
+  fi
 }
 
 # resolve_project: set REPLY_PROJECT_NAME and REPLY_PROJECT_PATH
@@ -178,6 +201,111 @@ drop_worktree_db() {
   unset MYSQL_PWD
 }
 
+# redis_cli: run redis-cli against the Redis server configured in a .env file
+#   $1: path to .env file; remaining args are passed to redis-cli
+redis_cli() {
+  local env_file="$1"
+  shift
+  local host port pass
+  host="$(parse_env_value REDIS_HOST "$env_file")"
+  port="$(parse_env_value REDIS_PORT "$env_file")"
+  pass="$(parse_env_value REDIS_PASSWORD "$env_file")"
+
+  if [[ -n "$pass" ]]; then
+    REDISCLI_AUTH="$pass" redis-cli -h "${host:-127.0.0.1}" -p "${port:-6379}" "$@"
+  else
+    redis-cli -h "${host:-127.0.0.1}" -p "${port:-6379}" "$@"
+  fi
+}
+
+# allocate_redis_db: print the lowest Redis DB index not used by any project
+# or worktree under $SPROUT_PROJECTS_ROOT. 0 and 1 are reserved for the main
+# projects (Laravel's REDIS_DB / REDIS_CACHE_DB defaults). Returns 1 if none free.
+#   $1: path to .env file (used to ask Redis how many databases it has)
+allocate_redis_db() {
+  local env_file="$1"
+  local max=""
+
+  if command -v redis-cli > /dev/null 2>&1; then
+    max="$(redis_cli "$env_file" CONFIG GET databases 2>/dev/null | sed -n 2p || true)"
+  fi
+  [[ "$max" =~ ^[0-9]+$ ]] || max=16
+
+  local used=" 0 1 " f key value
+  for f in "$SPROUT_PROJECTS_ROOT"/*/.env "$SPROUT_PROJECTS_ROOT"/*-worktrees/*/.env; do
+    [[ -f "$f" ]] || continue
+    for key in REDIS_DB REDIS_CACHE_DB; do
+      value="$(parse_env_value "$key" "$f")"
+      [[ "$value" =~ ^[0-9]+$ ]] && used="$used$value "
+    done
+  done
+
+  local n
+  for ((n = 2; n < max; n++)); do
+    if [[ "$used" != *" $n "* ]]; then
+      echo "$n"
+      return 0
+    fi
+  done
+  return 1
+}
+
+setup_redis() {
+  local dir="$1"
+  local proj_name="$2"
+  local folder_name="$3"
+  local env_file="$dir/.env"
+
+  [[ -f "$env_file" ]] || return 0
+  grep -q "^REDIS_" "$env_file" || return 0
+
+  local prefix
+  prefix="$(db_safe_name "${proj_name}_${folder_name}" | tr '[:upper:]' '[:lower:]')_"
+
+  set_env_var REDIS_PREFIX "$prefix" "$env_file"
+  set_env_var CACHE_PREFIX "${prefix}cache_" "$env_file"
+  set_env_var HORIZON_PREFIX "${prefix}horizon:" "$env_file"
+  echo "  → Updated .env: REDIS_PREFIX=${prefix} (plus CACHE_PREFIX, HORIZON_PREFIX)"
+
+  local redis_db
+  if redis_db="$(allocate_redis_db "$env_file")"; then
+    set_env_var REDIS_DB "$redis_db" "$env_file"
+    set_env_var REDIS_CACHE_DB "$redis_db" "$env_file"
+    echo "  → Updated .env: REDIS_DB=${redis_db}, REDIS_CACHE_DB=${redis_db}"
+  else
+    echo "  Warning: No free Redis database index — worktree shares the main DB (isolated by prefix only)."
+  fi
+}
+
+clear_worktree_redis() {
+  local env_file="$1"
+
+  [[ -f "$env_file" ]] || return 0
+  command -v redis-cli > /dev/null 2>&1 || return 0
+
+  local prefix redis_db
+  prefix="$(parse_env_value REDIS_PREFIX "$env_file")"
+  redis_db="$(parse_env_value REDIS_DB "$env_file")"
+  redis_db="${redis_db:-0}"
+
+  # Only clear worktrees that sprout-parallel gave their own prefix
+  [[ -n "$prefix" ]] || return 0
+
+  local host port pass
+  host="$(parse_env_value REDIS_HOST "$env_file")"
+  port="$(parse_env_value REDIS_PORT "$env_file")"
+  pass="$(parse_env_value REDIS_PASSWORD "$env_file")"
+  local cli=(redis-cli -h "${host:-127.0.0.1}" -p "${port:-6379}" -n "$redis_db")
+
+  [[ -n "$pass" ]] && export REDISCLI_AUTH="$pass"
+  echo "  → Clearing Redis keys '${prefix}*' in DB ${redis_db}"
+  "${cli[@]}" --scan --pattern "${prefix}*" \
+    | tr '\n' '\0' \
+    | xargs -0 -n 500 "${cli[@]}" unlink > /dev/null \
+    || echo "  Warning: Failed to clear Redis keys for '${prefix}'."
+  unset REDISCLI_AUTH
+}
+
 run_setup() {
   local dir="$1"
   local proj_path="${2:-}"
@@ -204,6 +332,11 @@ run_setup() {
   if [[ -n "$folder_name" ]]; then
     setup_db "$dir" "$folder_name"
     ran_any=true
+  fi
+
+  # Redis: own key prefix and DB index so queues/cache don't mix with main
+  if [[ -n "$proj_path" && -n "$folder_name" ]]; then
+    setup_redis "$dir" "$(basename "$proj_path")" "$folder_name"
   fi
 
   # PHP / Composer
@@ -383,9 +516,10 @@ cmd_delete() {
     die "Worktree '$branch' has uncommitted changes. Use --force to delete anyway."
   fi
 
-  # Drop the worktree database before the folder is removed
+  # Drop the worktree database and Redis keys before the folder is removed
   if [[ "$keep_db" == false ]]; then
     drop_worktree_db "$worktree_path/.env"
+    clear_worktree_redis "$worktree_path/.env"
   fi
 
   if [[ "$force" == true ]]; then
@@ -483,6 +617,9 @@ OPTIONS:
 SETUP (auto-detected, runs after worktree creation):
   .env                 Copied from main project's .env (real credentials)
   DB_DATABASE          New database cloned from main and .env updated
+  Redis                Own REDIS_PREFIX / CACHE_PREFIX / HORIZON_PREFIX and a
+                       free REDIS_DB (= REDIS_CACHE_DB) index, so queues and
+                       cache don't mix with the main project or other worktrees
   composer.json        vendor/ seeded from main project + composer dump-autoload
   package.json         node_modules/ seeded from main project + npm/yarn/pnpm install
 
@@ -505,7 +642,8 @@ EOF
       cat <<EOF
 COMMAND: $SCRIPT_NAME delete <branch-name> [options]
 
-  Removes a worktree folder, its git registration, and its cloned database.
+  Removes a worktree folder, its git registration, its cloned database,
+  and its Redis keys.
 
 ARGUMENTS:
   <branch-name>        Required. Branch name whose worktree to delete.
@@ -513,7 +651,8 @@ ARGUMENTS:
 OPTIONS:
   --project <name>     Target project. Auto-detected if inside a project.
   --force              Required when the worktree has uncommitted changes.
-  --keep-db            Skip dropping the worktree's cloned database.
+  --keep-db            Skip dropping the worktree's cloned database and
+                       clearing its Redis keys.
 
 EXAMPLES:
   $SCRIPT_NAME delete feature/my-thing
@@ -559,7 +698,7 @@ USAGE:
 
 COMMANDS:
   create <branch>   Create a new branch and worktree
-  delete <branch>   Remove a worktree, its git registration, and its database
+  delete <branch>   Remove a worktree, its git registration, database, and Redis keys
   list              List all worktrees for a project
   help [command]    Show help for a specific command
 
