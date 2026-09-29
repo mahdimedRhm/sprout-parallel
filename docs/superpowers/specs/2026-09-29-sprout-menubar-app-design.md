@@ -87,8 +87,8 @@ Field rules:
 | `redisDb` | `REDIS_DB` in worktree `.env`, as a number | `null` |
 | `redisPrefix` | `REDIS_PREFIX` in worktree `.env` | `null` |
 
-All strings pass through a `json_escape` helper that escapes `\`, `"`, and
-control characters (`\n`, `\t`, `\r`, others as `\u00XX`).
+All strings pass through a `json_escape` helper that escapes `\`, `"`, `\n`,
+`\t`, `\r`, and strips any other ASCII control characters.
 
 ### 1.2 `create` records the base branch
 
@@ -119,7 +119,7 @@ SwiftPM package, macOS 14+ (needed for `onKeyPress`), Swift 6 toolchain from Com
 | Unit | Responsibility | Depends on |
 |---|---|---|
 | `Shell` (protocol) + `LoginShell` | Run a command via `/bin/zsh -lc`, stream stdout+stderr lines, return exit code. `shellQuote()` for arguments. | Foundation `Process` |
-| `SproutCLI` | Build argument lists: `status --json`; `create <branch> --project <p> --from <base> [--no-setup]`; `delete <branch> --project <p> [--force] [--keep-db]`. Detect "script not found" (exit 127). | `Shell` |
+| `SproutCLI` | Build argument lists: `status --json`; `create <branch> --project <p> --from <base> [--no-setup]`; `delete <folder> --project <p> [--force] [--keep-db]` (the worktree folder name, which the script's `safe_name` maps to itself — this also works for detached-HEAD worktrees). Detect "script not found" (exit 127). | `Shell` |
 | `Models` | `Codable` types for the status JSON (`Status`, `Project`, `Worktree`, `LastCommit`). | — |
 | `WorktreeStore` | `@MainActor ObservableObject`: `projects`, `selectedProject`, `selectedWorktree`, `operation` (idle / running / failed(message)), `log: [String]`, `error: String?`. Methods `refresh()`, `create(...)`, `delete(...)`. Only one create/delete at a time. Keeps last good data when refresh fails. Refreshes after each create/delete regardless of outcome. | `SproutCLI`, `Models` |
 | `Openers` | VS Code: `open -a "Visual Studio Code" <path>`. Warp: `open -a Warp <path>`. Finder: `NSWorkspace.activateFileViewerSelecting`. | AppKit |
@@ -160,7 +160,7 @@ Approved mockup: `.superpowers/brainstorm/*/content/terminal-style.html`.
 - Table: `●` status dot, branch, `↑n ↓n`, `db:N`; column headers uppercase muted.
   Detail is a key/value box (`base`, `head <hash> <subject> · <when>`, `dirty`,
   `mysql`, `redis`).
-- Inputs are underlined fields with a blinking block caret.
+- Inputs are underlined fields (green underline) with a green insertion caret.
 - Every create/delete log starts with the exact command:
   `$ sprout-parallel create feature/x --project scooda --from main`.
 - Keyboard-first, with hints in the footer. List: `⏎` VS Code, `t` Warp,
