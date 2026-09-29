@@ -64,6 +64,7 @@ public struct PanelView: View {
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
         guard store.mode == .list else { return .ignored }
+        guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
         let shift = press.modifiers.contains(.shift)
         let worktree = store.selectedWorktree
 

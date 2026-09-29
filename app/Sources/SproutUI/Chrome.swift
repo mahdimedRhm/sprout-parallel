@@ -105,6 +105,7 @@ struct ProjectSidebar: View {
     @EnvironmentObject private var store: WorktreeStore
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("PROJECTS")
@@ -113,9 +114,13 @@ struct ProjectSidebar: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                 ForEach(store.projects) { project in
-                    row(project)
+                    row(project).id(project.name)
                 }
             }
+        }
+        .onChange(of: store.selectedProjectName) { _, name in
+            if let name { proxy.scrollTo(name) }
+        }
         }
         .background(Theme.sidebar)
     }

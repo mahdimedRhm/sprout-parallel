@@ -15,14 +15,20 @@ struct WorktreeListView: View {
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     WorktreeRow.header
+                    ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 1) {
                             ForEach(project.worktrees) { worktree in
                                 WorktreeRow(worktree: worktree, selected: worktree.path == store.selectedWorktreePath)
+                                    .id(worktree.path)
                                     .onTapGesture(count: 2) { Openers.vscode(worktree.path) }
                                     .onTapGesture { store.selectedWorktreePath = worktree.path }
                             }
                         }
+                    }
+                    .onChange(of: store.selectedWorktreePath) { _, path in
+                        if let path { proxy.scrollTo(path) }
+                    }
                     }
                     .frame(maxHeight: 120)
                     if let worktree = store.selectedWorktree {
