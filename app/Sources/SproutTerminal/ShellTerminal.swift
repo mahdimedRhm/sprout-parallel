@@ -110,6 +110,11 @@ public final class ShellTerminal: NSObject, TerminalHandle {
         Self.reap(pid)
     }
 
+    public func send(_ text: String) {
+        guard !ended else { return }
+        terminalView.send(txt: text)
+    }
+
     /// SwiftTerm stops watching the child once terminated, so nothing waits on it:
     /// reap it here, escalating to SIGKILL if it ignores SIGTERM.
     private static func reap(_ pid: pid_t) {

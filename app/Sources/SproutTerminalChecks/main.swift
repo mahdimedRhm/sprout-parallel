@@ -11,5 +11,6 @@ func runSessionChecks() {
 
 runSessionChecks()
 await shellChecks()
+await serviceChecks()
 
 finishChecks()

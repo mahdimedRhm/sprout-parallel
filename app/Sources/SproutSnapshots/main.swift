@@ -37,6 +37,7 @@ final class SnapshotTerminal: TerminalHandle {
     }
 
     func terminate() {}
+    func send(_ text: String) {}
 }
 
 let fixture = #"""

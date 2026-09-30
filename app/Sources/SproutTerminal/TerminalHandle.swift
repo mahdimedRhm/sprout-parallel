@@ -16,4 +16,6 @@ public protocol TerminalHandle: AnyObject {
     /// Called with true/false as the terminal view becomes/resigns first responder.
     var onFocusChange: ((Bool) -> Void)? { get set }
     func terminate()
+    /// Types text into the shell as if the user did (e.g. "ls\n", or "\u{3}" for ⌃C).
+    func send(_ text: String)
 }
