@@ -30,6 +30,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
+    /// `open -a Sprout` (or Spotlight) while running shows the window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return false
+    }
+
+    private func showWindow() {
+        let window = self.window ?? makeWindow()
+        self.window = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     @objc private func toggleWindow() {
         let window = self.window ?? makeWindow()
         self.window = window
