@@ -2,12 +2,53 @@ import AppKit
 import Darwin
 import SwiftTerm
 
+/// Zero-size subview of the terminal view that reports when the terminal (or a
+/// descendant) becomes or stops being its window's first responder. SwiftTerm's
+/// responder methods aren't open for overriding, so it watches the window instead.
+final class FocusProbe: NSView {
+    var onChange: ((Bool) -> Void)?
+    private var observation: NSKeyValueObservation?
+    private var focused = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observation = nil
+        guard let window else {
+            report(false)
+            return
+        }
+        observation = window.observe(\.firstResponder, options: [.initial, .new]) { [weak self] window, _ in
+            self?.update(window)
+        }
+    }
+
+    private func update(_ window: NSWindow) {
+        guard let target = superview else { return }
+        var inside = false
+        if let responder = window.firstResponder as? NSView {
+            inside = responder === target || responder.isDescendant(of: target)
+        }
+        report(inside)
+    }
+
+    private func report(_ value: Bool) {
+        guard value != focused else { return }
+        focused = value
+        onChange?(value)
+    }
+}
+
 /// A real login shell running in a folder inside a SwiftTerm view.
 @MainActor
 public final class ShellTerminal: NSObject, TerminalHandle {
     public let id = UUID()
     public let terminalView: LocalProcessTerminalView
+    private let focusProbe = FocusProbe()
     public var onExit: (() -> Void)?
+    public var onFocusChange: ((Bool) -> Void)? {
+        get { focusProbe.onChange }
+        set { focusProbe.onChange = newValue }
+    }
     public var view: NSView? { terminalView }
 
     private let shellName: String
@@ -22,6 +63,7 @@ public final class ShellTerminal: NSObject, TerminalHandle {
 
         shellName = (shell as NSString).lastPathComponent
         terminalView = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 320))
+        terminalView.addSubview(focusProbe)
         super.init()
         terminalView.processDelegate = self
         TerminalTheme.apply(to: terminalView)

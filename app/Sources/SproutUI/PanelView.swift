@@ -8,6 +8,7 @@ public struct PanelView: View {
     @FocusState private var focused: Bool
     @EnvironmentObject private var terminals: TerminalSessions
     @AppStorage("sprout.terminalCollapsed") private var terminalCollapsed = false
+    @State private var windowBox = WindowBox()
 
     public static let minimumSize = CGSize(width: 620, height: 400)
 
@@ -28,7 +29,7 @@ public struct PanelView: View {
                             .padding(12)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     } bottom: {
-                        TerminalPane()
+                        TerminalPane(focusTerminal: { focusTerminal(in: $0) })
                     }
                 }
             }
@@ -57,9 +58,24 @@ public struct PanelView: View {
             focused = true
             await store.refresh()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
-            focused = store.mode == .list
+        .background(WindowAccessor(box: windowBox))
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            // Alerts and other windows becoming key aren't ours to react to.
+            if let window = windowBox.window, note.object as? NSWindow !== window { return }
+            // Coming back to the panel must not steal focus from the terminal.
+            if !terminals.terminalHasFocus {
+                focused = store.mode == .list
+            }
             Task { await store.refresh() }
+        }
+        .onChange(of: terminals.focusLostCount) { _, _ in
+            // The focused terminal closed or its shell exited: AppKit would leave
+            // the window itself as first responder, so hand focus on.
+            if let path = terminalPath, !terminalCollapsed, terminals.activeTab(for: path) != nil {
+                focusTerminal(in: path)
+            } else {
+                focused = true
+            }
         }
     }
 
@@ -181,5 +197,24 @@ public struct PanelView: View {
             return .ignored
         }
         return .handled
+    }
+}
+
+/// The panel's window, captured once the view is in it.
+final class WindowBox {
+    weak var window: NSWindow?
+}
+
+private struct WindowAccessor: NSViewRepresentable {
+    let box: WindowBox
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [weak view] in box.window = view?.window }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        if box.window == nil { box.window = view.window }
     }
 }

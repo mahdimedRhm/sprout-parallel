@@ -1,3 +1,4 @@
+import AppKit
 import CheckKit
 import Foundation
 import SproutTerminal
@@ -55,20 +56,34 @@ func shellChecks() async {
     checkEqual(terminal.title, "sleep", "title is the running command")
     check(await waitUntil(6) { !terminal.isBusy }, "idle again when it finishes")
 
+    // Focus reports follow the real view's first-responder state in a window.
+    var focusReports: [Bool] = []
+    terminal.onFocusChange = { focusReports.append($0) }
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView?.addSubview(terminal.terminalView)
+    check(window.makeFirstResponder(terminal.terminalView), "terminal view accepts focus")
+    checkEqual(focusReports, [true], "focusing the terminal view reports true")
+    window.makeFirstResponder(nil)
+    checkEqual(focusReports, [true, false], "resigning reports false")
+    window.makeFirstResponder(terminal.terminalView)
+    terminal.terminalView.removeFromSuperview()
+    checkEqual(focusReports, [true, false, true, false], "removing a focused view reports false")
+
     terminal.terminalView.send(txt: "exit\n")
     check(await waitUntil(5) { exited }, "exit fires onExit")
 
-    guard let other = ShellTerminal(directory: dir.path) else {
+    guard let second = ShellTerminal(directory: dir.path) else {
         check(false, "second shell starts")
         return
     }
     var otherExited = false
-    other.onExit = { otherExited = true }
-    let pid = other.terminalView.process.shellPid
-    other.terminate()
+    second.onExit = { otherExited = true }
+    let pid = second.terminalView.process.shellPid
+    second.terminate()
     _ = await waitUntil(1.5) { otherExited }
     check(!otherExited, "terminate() doesn't report an exit")
-    check(!other.isBusy, "a terminated shell is not busy")
+    check(!second.isBusy, "a terminated shell is not busy")
     // A zombie still answers kill(pid, 0) == 0; only a reaped process gives ESRCH.
     check(await waitUntil(5) { kill(pid, 0) == -1 && errno == ESRCH }, "terminate() reaps the shell (no zombie)")
 }

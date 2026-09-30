@@ -8,6 +8,8 @@ struct TerminalPane: View {
     @EnvironmentObject private var store: WorktreeStore
     @EnvironmentObject private var terminals: TerminalSessions
     @AppStorage("sprout.terminalCollapsed") private var collapsed = false
+    /// Moves keyboard focus into the worktree's terminal.
+    let focusTerminal: (String) -> Void
 
     private var path: String? { store.selectedWorktree?.path }
 
@@ -42,11 +44,13 @@ struct TerminalPane: View {
                         ) {
                             terminals.activate(tab.id, in: path)
                             collapsed = false
+                            focusTerminal(path)
                         }
                     }
                     Button {
                         terminals.openTab(in: path)
                         collapsed = false
+                        focusTerminal(path)
                     } label: {
                         Text("＋").foregroundStyle(Theme.muted).padding(.horizontal, 6)
                     }
@@ -57,7 +61,7 @@ struct TerminalPane: View {
                 }
                 Spacer()
                 Button { collapsed.toggle() } label: {
-                    KeyHint(key: "⌃`", label: collapsed ? "show" : "hide")
+                    Text(collapsed ? "▴ show" : "▾ hide").foregroundStyle(Theme.muted)
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 10)

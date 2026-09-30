@@ -13,5 +13,7 @@ public protocol TerminalHandle: AnyObject {
     var view: NSView? { get }
     /// Called once if the shell exits on its own (not after `terminate()`).
     var onExit: (() -> Void)? { get set }
+    /// Called with true/false as the terminal view becomes/resigns first responder.
+    var onFocusChange: ((Bool) -> Void)? { get set }
     func terminate()
 }

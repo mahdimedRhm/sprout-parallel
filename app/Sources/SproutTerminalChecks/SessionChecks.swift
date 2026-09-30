@@ -66,4 +66,32 @@ func sessionChecks() {
     sessions.terminateAll()
     check(bTab.terminated, "terminateAll terminates every shell")
     checkEqual(sessions.busyTabs(), [], "nothing is left after terminateAll")
+
+    // Focus tracking (the flag esc-handling in forms and window-key handling rely on).
+    let f = TerminalSessions { _ in FakeTerminal() }
+    let one = f.openTab(in: a) as! FakeTerminal
+    let two = f.openTab(in: a) as! FakeTerminal
+    check(!f.terminalHasFocus, "no terminal focus initially")
+    one.setFocused(true)
+    check(f.terminalHasFocus, "focus report sets terminalHasFocus")
+    one.setFocused(false)
+    check(!f.terminalHasFocus, "resign clears terminalHasFocus")
+    one.setFocused(true)
+    two.setFocused(true)
+    one.setFocused(false)
+    check(f.terminalHasFocus, "a stale resign from another tab keeps the flag")
+    two.setFocused(false)
+    check(!f.terminalHasFocus, "flag clears once the focused tab resigns")
+
+    let before = f.focusLostCount
+    two.setFocused(true)
+    f.closeTab(two.id, in: a)
+    check(!f.terminalHasFocus, "closing the focused tab clears the flag")
+    checkEqual(f.focusLostCount, before + 1, "closing the focused tab signals focus loss")
+    f.closeTab(one.id, in: a)
+    checkEqual(f.focusLostCount, before + 1, "closing an unfocused tab doesn't")
+    let three = f.openTab(in: a) as! FakeTerminal
+    three.setFocused(true)
+    three.exitShell()
+    checkEqual(f.focusLostCount, before + 2, "a focused shell exiting signals focus loss")
 }

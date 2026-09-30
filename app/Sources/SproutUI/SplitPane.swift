@@ -11,8 +11,9 @@ struct SplitPane<Top: View, Bottom: View>: View {
     @State private var dragging = false
     @State private var cursorPushed = false
 
-    /// The top always keeps at least this much height.
-    static var minimumTopHeight: CGFloat { 180 }
+    /// The top always keeps at least this much height: in list mode that's the
+    /// header, two rows and the details card.
+    static var minimumTopHeight: CGFloat { 300 }
 
     /// Height of the bottom when collapsed: just its tab bar.
     static var collapsedHeight: CGFloat { 30 }
@@ -35,7 +36,7 @@ struct SplitPane<Top: View, Bottom: View>: View {
             let room = height - Self.minimumTopHeight - dividerHeight
             let bottomHeight = max(Self.collapsedHeight, min(wanted, room))
             VStack(spacing: 0) {
-                top.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                top.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
                 divider(totalHeight: height)
                 bottom.frame(height: bottomHeight)
             }

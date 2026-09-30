@@ -261,8 +261,8 @@ background to move it and its edges to resize it; it remembers where you left it
 Every worktree has its own terminal tabs below its details, running your login
 shell (`zsh -l`, so `~/.zshrc` applies) in the worktree folder. Switching
 worktree switches terminals; the others keep running. Drag the divider to
-resize; ``⌃` `` hides/shows it and moves focus between the list and the
-terminal. While the terminal has focus every key goes to the shell. Terminals
+resize, and use the hide/show button to collapse it. ``⌃` `` moves focus
+between the list and the terminal (opening the terminal if it is hidden). While the terminal has focus every key goes to the shell. Terminals
 of deleted worktrees are closed, and quitting Sprout warns if a command is still
 running.
 

@@ -29,6 +29,7 @@ final class SnapshotTerminal: TerminalHandle {
     let isBusy: Bool
     var view: NSView? { nil }
     var onExit: (() -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
 
     init(title: String = "zsh", busy: Bool = false) {
         self.title = title
@@ -90,6 +91,15 @@ let ok: (String) -> ShellResult = { _ in ShellResult(exitCode: 0, stdout: fixtur
 
 let list = await makeStore(ok)
 render("list", list)
+render("min-size-list", list, size: PanelView.minimumSize)
+do {
+    // Drag the divider to its cap (bottom = 85%) and check list mode still holds together.
+    let key = "sprout.terminalFraction"
+    let saved = UserDefaults.standard.object(forKey: key)
+    UserDefaults.standard.set(0.85, forKey: key)
+    render("list-fraction-cap", list)
+    if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+}
 
 let empty = await makeStore(ok)
 empty.selectProject("bookcast")

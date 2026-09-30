@@ -28,6 +28,13 @@ public final class TerminalSessions: ObservableObject {
     @Published public private(set) var activeByPath: [String: UUID] = [:]
     @Published public private(set) var failedPaths: Set<String> = []
 
+    /// True while a terminal view is the window's first responder.
+    @Published public private(set) var terminalHasFocus = false
+    /// Bumped when the focused tab goes away (closed, exited, pruned), so the
+    /// UI can hand focus to another tab or back to the list.
+    @Published public private(set) var focusLostCount = 0
+    private var focusedTabID: UUID?
+
     private let factory: Factory
     /// Worktrees whose terminal has been opened at least once.
     private var startedPaths: Set<String> = []
@@ -62,9 +69,20 @@ public final class TerminalSessions: ObservableObject {
         failedPaths.remove(path)
         let id = handle.id
         handle.onExit = { [weak self] in self?.remove(id, in: path) }
+        handle.onFocusChange = { [weak self] focused in self?.focusChanged(id, focused) }
         tabsByPath[path, default: []].append(handle)
         activeByPath[path] = id
         return handle
+    }
+
+    /// A terminal reports that it gained or lost first responder.
+    public func focusChanged(_ id: UUID, _ focused: Bool) {
+        if focused {
+            focusedTabID = id
+        } else if focusedTabID == id {
+            focusedTabID = nil
+        }
+        terminalHasFocus = focusedTabID != nil
     }
 
     public func activate(_ id: UUID, in path: String) {
@@ -86,6 +104,7 @@ public final class TerminalSessions: ObservableObject {
         }
         startedPaths.formIntersection(paths)
         failedPaths.formIntersection(paths)
+        reconcileFocus()
     }
 
     public func busyTabs() -> [BusyTab] {
@@ -98,6 +117,7 @@ public final class TerminalSessions: ObservableObject {
         tabsByPath.values.flatMap { $0 }.forEach { $0.terminate() }
         tabsByPath = [:]
         activeByPath = [:]
+        reconcileFocus()
     }
 
     private func remove(_ id: UUID, in path: String) {
@@ -108,5 +128,15 @@ public final class TerminalSessions: ObservableObject {
         if activeByPath[path] == id {
             activeByPath[path] = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)].id
         }
+        reconcileFocus()
+    }
+
+    /// If the focused tab no longer exists, drop the flag and tell the UI.
+    private func reconcileFocus() {
+        guard let id = focusedTabID,
+              !tabsByPath.values.contains(where: { $0.contains { $0.id == id } }) else { return }
+        focusedTabID = nil
+        terminalHasFocus = false
+        focusLostCount += 1
     }
 }

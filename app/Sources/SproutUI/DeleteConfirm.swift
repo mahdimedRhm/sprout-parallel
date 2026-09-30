@@ -1,8 +1,10 @@
 import SproutCore
+import SproutTerminal
 import SwiftUI
 
 struct DeleteConfirm: View {
     @EnvironmentObject private var store: WorktreeStore
+    @EnvironmentObject private var terminals: TerminalSessions
     let worktree: Worktree
 
     @State private var force = false
@@ -38,7 +40,8 @@ struct DeleteConfirm: View {
                     .disabled(!canDelete)
                     .opacity(canDelete ? 1 : 0.4)
                 ActionChip(key: "esc", label: store.operation == .succeeded ? "done" : "back") { store.backToList() }
-                    .keyboardShortcut(.cancelAction)
+                    // While the terminal has focus, esc belongs to the shell.
+                    .keyboardShortcut(terminals.terminalHasFocus ? nil : .cancelAction)
                     .disabled(store.isBusy)
             }
             .font(Theme.mono(11))

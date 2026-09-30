@@ -1,9 +1,11 @@
 import SproutCore
+import SproutTerminal
 import SwiftUI
 
 /// Confirmation pane for deleting every worktree of a project.
 struct ClearConfirm: View {
     @EnvironmentObject private var store: WorktreeStore
+    @EnvironmentObject private var terminals: TerminalSessions
     let project: Project
 
     @State private var force = false
@@ -61,7 +63,8 @@ struct ClearConfirm: View {
                     .disabled(locked)
                     .opacity(locked ? 0.4 : 1)
                 ActionChip(key: "esc", label: store.operation == .succeeded ? "done" : "back") { store.backToList() }
-                    .keyboardShortcut(.cancelAction)
+                    // While the terminal has focus, esc belongs to the shell.
+                    .keyboardShortcut(terminals.terminalHasFocus ? nil : .cancelAction)
                     .disabled(store.isBusy)
             }
             .font(Theme.mono(11))

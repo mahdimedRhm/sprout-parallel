@@ -1,8 +1,10 @@
 import SproutCore
+import SproutTerminal
 import SwiftUI
 
 struct CreateForm: View {
     @EnvironmentObject private var store: WorktreeStore
+    @EnvironmentObject private var terminals: TerminalSessions
     let project: Project
 
     @State private var branch = ""
@@ -67,7 +69,8 @@ struct CreateForm: View {
                     .disabled(!canSubmit)
                     .opacity(canSubmit ? 1 : 0.4)
                 ActionChip(key: "esc", label: store.operation == .succeeded ? "done" : "back") { store.backToList() }
-                    .keyboardShortcut(.cancelAction)
+                    // While the terminal has focus, esc belongs to the shell.
+                    .keyboardShortcut(terminals.terminalHasFocus ? nil : .cancelAction)
                     .disabled(store.isBusy)
             }
             .font(Theme.mono(11))
