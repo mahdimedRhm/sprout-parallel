@@ -103,6 +103,29 @@ assert_contains "$out" "Error: Failed to delete 1 worktree(s) in 'beta'." "final
 assert_eq "$(exists "$WT/feature-fine")" "no" "other worktrees still cleared"
 assert_eq "$(exists "$WT/feature-locked")" "yes" "failed worktree left in place"
 
+# ─── never drops the main project's database ──────────────────────────────────
+
+# A worktree whose .env still names the main DB (e.g. DB clone failed at create)
+git -C "$ROOT/beta" worktree unlock "$WT/feature-locked"
+"$SP" delete feature/locked --project beta > /dev/null 2>&1
+printf 'DB_DATABASE=beta_main\nDB_USERNAME=root\n' > "$ROOT/beta/.env"
+"$SP" create feature/stale --project beta --no-setup > /dev/null 2>&1
+cp "$ROOT/beta/.env" "$WT/feature-stale/.env"
+: > "$CALLS"
+rc=0
+out="$("$SP" delete feature/stale --project beta 2>&1)" || rc=$?
+assert_eq "$rc" "0" "delete still succeeds"
+assert_eq "$(grep -c 'DROP DATABASE' "$CALLS" || true)" "0" "main project's database is not dropped"
+assert_contains "$out" "Warning: 'beta_main' is the main project's database — not dropping it" "warns instead of dropping"
+assert_eq "$(exists "$WT/feature-stale")" "no" "worktree folder still removed"
+
+# A worktree with its own DB is still dropped when the main project has a .env
+"$SP" create feature/own --project beta --no-setup > /dev/null 2>&1
+printf 'DB_DATABASE=beta_main_feature_own\nDB_USERNAME=root\n' > "$WT/feature-own/.env"
+: > "$CALLS"
+"$SP" clear --project beta > /dev/null 2>&1
+assert_contains "$(cat "$CALLS")" 'DROP DATABASE IF EXISTS `beta_main_feature_own`' "worktree's own database still dropped"
+
 # ─── argument handling ────────────────────────────────────────────────────────
 
 rc=0

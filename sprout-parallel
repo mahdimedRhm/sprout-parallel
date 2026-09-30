@@ -177,6 +177,7 @@ setup_db() {
 
 drop_worktree_db() {
   local env_file="$1"
+  local main_env_file="$2"
 
   [[ -f "$env_file" ]] || return 0
   command -v mysql > /dev/null 2>&1 || return 0
@@ -192,6 +193,13 @@ drop_worktree_db() {
   db_port="${db_port:-3306}"
 
   [[ -n "$wt_db" && -n "$db_user" ]] || return 0
+
+  # A worktree whose DB clone failed at create still points at the main
+  # project's database — never drop that one.
+  if [[ -f "$main_env_file" && "$wt_db" == "$(parse_env_var DB_DATABASE "$main_env_file")" ]]; then
+    echo "  Warning: '$wt_db' is the main project's database — not dropping it."
+    return 0
+  fi
 
   export MYSQL_PWD="$db_pass"
   echo "  → Dropping database '$wt_db'"
@@ -626,7 +634,7 @@ cmd_delete() {
 
   # Drop the worktree database and Redis keys before the folder is removed
   if [[ "$keep_db" == false ]]; then
-    drop_worktree_db "$worktree_path/.env"
+    drop_worktree_db "$worktree_path/.env" "$proj_path/.env"
     clear_worktree_redis "$worktree_path/.env"
   fi
 
