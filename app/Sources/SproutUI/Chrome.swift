@@ -160,17 +160,19 @@ struct FooterBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ForEach(hints, id: \.self) { hint in
-                KeyHint(key: hint.key, label: hint.label, tint: hint.primary ? Theme.green : Theme.muted)
+            // Full hint list when it fits, otherwise the short one; never wraps.
+            ViewThatFits(in: .horizontal) {
+                hintRow(hints)
+                hintRow(shortHints)
             }
-            Spacer()
-            LoginItemToggle()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            LoginItemToggle().lineLimit(1).fixedSize()
             Button("close") { NSApp.keyWindow?.orderOut(nil) }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).lineLimit(1).fixedSize()
                 .foregroundStyle(Theme.muted)
                 .keyboardShortcut("w")
             Button("quit") { NSApp.terminate(nil) }
-                .buttonStyle(.plain)
+                .buttonStyle(.plain).lineLimit(1).fixedSize()
                 .foregroundStyle(Theme.muted)
                 .keyboardShortcut("q")
         }
@@ -180,6 +182,24 @@ struct FooterBar: View {
         .background(Theme.bar)
     }
 
+    private func hintRow(_ hints: [Hint]) -> some View {
+        HStack(spacing: 12) {
+            ForEach(hints, id: \.self) { hint in
+                KeyHint(key: hint.key, label: hint.label, tint: hint.primary ? Theme.green : Theme.muted)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+    }
+
+    /// Lower-priority hints dropped, for narrow windows.
+    private var shortHints: [Hint] {
+        guard store.mode == .list else { return hints }
+        return [Hint(key: "⏎", label: "code", primary: true), Hint(key: "n", label: "new"),
+                Hint(key: "⌃`", label: "terminal"), Hint(key: "⌘T", label: "tab"),
+                Hint(key: "↑↓", label: "move")]
+    }
+
     private var hints: [Hint] {
         switch store.mode {
         case .list:
@@ -187,7 +207,8 @@ struct FooterBar: View {
              Hint(key: "f", label: "finder"), Hint(key: "o", label: "open"),
              Hint(key: "n", label: "new"),
              Hint(key: "⌫", label: "delete"), Hint(key: "⇧X", label: "clear all"),
-             Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move")]
+             Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move"),
+             Hint(key: "⌃`", label: "terminal"), Hint(key: "⌘T", label: "tab")]
         case .create:
             [Hint(key: "⌘⏎", label: "create", primary: true), Hint(key: "esc", label: "back")]
         case .delete:

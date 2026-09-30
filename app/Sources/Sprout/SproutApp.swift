@@ -1,5 +1,7 @@
 import AppKit
+import Combine
 import SproutCore
+import SproutTerminal
 import SproutUI
 import SwiftUI
 
@@ -19,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let frameName = "SproutPanel"
 
     private let store = WorktreeStore(cli: SproutCLI(shell: LoginShell()))
+    private let terminals = TerminalSessions { ShellTerminal(directory: $0) }
+    private var projectsWatch: AnyCancellable?
     private var statusItem: NSStatusItem?
     private var window: NSWindow?
 
@@ -28,6 +32,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.target = self
         item.button?.action = #selector(toggleWindow)
         statusItem = item
+
+        // Close the terminals of worktrees that no longer exist (deleted, cleared, removed elsewhere).
+        projectsWatch = store.$projects.dropFirst().sink { [weak self] projects in
+            MainActor.assumeIsolated {
+                self?.terminals.prune(keeping: Set(projects.flatMap { $0.worktrees.map(\.path) }))
+            }
+        }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let busy = terminals.busyTabs()
+        if !busy.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = busy.count == 1
+                ? "1 terminal is still running"
+                : "\(busy.count) terminals are still running"
+            alert.informativeText = busy.map(\.label).joined(separator: "\n") + "\n\nQuitting Sprout stops them."
+            alert.addButton(withTitle: "Quit Anyway")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+        }
+        terminals.terminateAll()
+        return .terminateNow
     }
 
     /// `open -a Sprout` (or Spotlight) while running shows the window.
@@ -70,7 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.backgroundColor = NSColor(srgbRed: 0x0B / 255, green: 0x0F / 255, blue: 0x14 / 255, alpha: 1)
         window.contentMinSize = PanelView.minimumSize
 
-        let hosting = NSHostingView(rootView: PanelView().environmentObject(store))
+        let hosting = NSHostingView(
+            rootView: PanelView().environmentObject(store).environmentObject(terminals))
         hosting.sizingOptions = []
         window.contentView = hosting
 

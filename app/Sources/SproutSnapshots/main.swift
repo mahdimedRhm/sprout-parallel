@@ -1,5 +1,6 @@
 import AppKit
 import SproutCore
+import SproutTerminal
 import SproutUI
 import SwiftUI
 
@@ -18,6 +19,24 @@ final class FixtureShell: Shell {
         }
         return result
     }
+}
+
+/// Terminal stand-in for snapshots (the AppKit terminal doesn't render in ImageRenderer).
+@MainActor
+final class SnapshotTerminal: TerminalHandle {
+    let id = UUID()
+    let title: String
+    let isBusy: Bool
+    var view: NSView? { nil }
+    var onExit: (() -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
+
+    init(title: String = "zsh", busy: Bool = false) {
+        self.title = title
+        self.isBusy = busy
+    }
+
+    func terminate() {}
 }
 
 let fixture = #"""
@@ -50,8 +69,11 @@ func makeStore(_ respond: @escaping (String) -> ShellResult) async -> WorktreeSt
 }
 
 @MainActor
-func render(_ name: String, _ store: WorktreeStore) {
-    let renderer = ImageRenderer(content: PanelView().environmentObject(store).frame(width: 900, height: 640))
+func render(_ name: String, _ store: WorktreeStore, terminals: TerminalSessions? = nil,
+            size: CGSize = CGSize(width: 900, height: 640)) {
+    let terminals = terminals ?? TerminalSessions { _ in SnapshotTerminal() }
+    let renderer = ImageRenderer(
+        content: PanelView().environmentObject(store).environmentObject(terminals).frame(width: size.width, height: size.height))
     renderer.scale = 2
     guard let image = renderer.nsImage,
           let tiff = image.tiffRepresentation,
@@ -69,6 +91,15 @@ let ok: (String) -> ShellResult = { _ in ShellResult(exitCode: 0, stdout: fixtur
 
 let list = await makeStore(ok)
 render("list", list)
+render("min-size-list", list, size: PanelView.minimumSize)
+do {
+    // Drag the divider to its cap (bottom = 85%) and check list mode still holds together.
+    let key = "sprout.terminalFraction"
+    let saved = UserDefaults.standard.object(forKey: key)
+    UserDefaults.standard.set(0.85, forKey: key)
+    render("list-fraction-cap", list)
+    if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+}
 
 let empty = await makeStore(ok)
 empty.selectProject("bookcast")
@@ -102,6 +133,7 @@ let createOK: (String) -> ShellResult = { command in
 let creating = await makeStore(createOK)
 creating.beginCreate()
 render("create-empty", creating)
+render("min-size-create", creating, size: PanelView.minimumSize)
 await creating.create(branch: "feature/invoices", base: "main", runSetup: true)
 render("create-done", creating)
 
@@ -139,3 +171,16 @@ if case .clear(let project) = clearFail.mode {
     await clearFail.clear(project, force: false, dropData: true)
 }
 render("clear-done", clearFail)
+
+let withTerminals = await makeStore(ok)
+var nextTitles = [("php", true), ("npm", true), ("zsh", false)]
+let busyTerminals = TerminalSessions { _ in
+    let (title, busy) = nextTitles.isEmpty ? ("zsh", false) : nextTitles.removeFirst()
+    return SnapshotTerminal(title: title, busy: busy)
+}
+if let path = withTerminals.selectedWorktree?.path {
+    busyTerminals.openTab(in: path)
+    busyTerminals.openTab(in: path)
+    busyTerminals.openTab(in: path)
+}
+render("terminal-tabs", withTerminals, terminals: busyTerminals)

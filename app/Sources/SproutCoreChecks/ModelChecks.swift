@@ -1,3 +1,4 @@
+import CheckKit
 import Foundation
 import SproutCore
 
