@@ -25,6 +25,8 @@ struct KeyCheatSheet: View {
             ("⇧X", "clear all worktrees of the project"),
             ("r  ⌘R", "refresh"),
             ("l", "log of the running / last operation"),
+            ("⌘⇧P", "command palette"),
+            ("s  q  d", "serve / queue / database actions"),
         ]),
     ]
 

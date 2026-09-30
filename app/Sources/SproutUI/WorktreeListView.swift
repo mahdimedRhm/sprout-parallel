@@ -1,5 +1,6 @@
 import AppKit
 import SproutCore
+import SproutTerminal
 import SwiftUI
 
 struct WorktreeListView: View {
@@ -133,7 +134,16 @@ struct SyncText: View {
 
 struct WorktreeDetail: View {
     @EnvironmentObject private var store: WorktreeStore
+    @EnvironmentObject private var terminals: TerminalSessions
     let worktree: Worktree
+
+    private func serviceStatus(_ service: Service) -> some View {
+        let running = terminals.isServiceRunning(service, in: worktree.path)
+        return HStack(spacing: 4) {
+            Text(running ? "● running" : "○ stopped").foregroundStyle(running ? Theme.green : Theme.muted)
+            if !running { Text("· \(service == .serve ? "s" : "q") to start").foregroundStyle(Theme.muted) }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -165,14 +175,13 @@ struct WorktreeDetail: View {
                         Button(url) { Openers.browser(url) }
                             .buttonStyle(.plain)
                             .foregroundStyle(worktree.isServing ? Theme.cyan : Theme.muted)
-                        if !worktree.isServing {
-                            Text("not running · php artisan serve").foregroundStyle(Theme.muted)
-                        }
+                        serviceStatus(.serve)
                     }
                 } else {
-                    Text("—").foregroundStyle(Theme.muted)
+                    serviceStatus(.serve)
                 }
             }
+            KV("queue") { serviceStatus(.queue) }
             KV("path") {
                 Text((worktree.path as NSString).abbreviatingWithTildeInPath)
                     .foregroundStyle(Theme.muted)

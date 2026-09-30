@@ -201,7 +201,7 @@ struct FooterBar: View {
     private var shortHints: [Hint] {
         guard store.mode == .list else { return hints }
         return [Hint(key: "⏎", label: "code", primary: true), Hint(key: "⌃`", label: "terminal"),
-                Hint(key: "?", label: "keys", primary: true)]
+                Hint(key: "⌘⇧P", label: "actions"), Hint(key: "?", label: "keys", primary: true)]
     }
 
     private var hints: [Hint] {
@@ -209,7 +209,7 @@ struct FooterBar: View {
         case .list:
             [Hint(key: "⏎", label: "code", primary: true), Hint(key: "←→↑↓", label: "move"),
              Hint(key: "n", label: "new"), Hint(key: "⌃`", label: "terminal"),
-             Hint(key: "⌘T", label: "tab"), Hint(key: "?", label: "keys", primary: true)]
+             Hint(key: "⌘⇧P", label: "actions"), Hint(key: "?", label: "keys", primary: true)]
         case .create:
             [Hint(key: "⌘⏎", label: "create", primary: true), Hint(key: "esc", label: "back")]
         case .delete:
