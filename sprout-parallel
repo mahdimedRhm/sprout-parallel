@@ -889,6 +889,121 @@ cmd_clear() {
   [[ "$failed" -eq 0 ]] || die "Failed to delete $failed worktree(s) in '$proj_name'."
 }
 
+# db_env: a DB_* value from the worktree .env, falling back to the main one
+#   $1: key  $2: worktree .env  $3: main .env
+db_env() {
+  local value
+  value="$(parse_env_var "$1" "$2")"
+  [[ -n "$value" ]] || value="$(parse_env_var "$1" "$3")"
+  echo "$value"
+}
+
+cmd_db() {
+  local action="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$action" in
+    create|refresh|drop) ;;
+    *) die "Usage: $SCRIPT_NAME db <create|refresh|drop> <branch> [--project <name>]" ;;
+  esac
+
+  local branch="" project_arg=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project)
+        [[ -n "${2:-}" ]] || die "Missing value for --project."
+        project_arg="$2"
+        shift 2
+        ;;
+      -*) die "Unknown option: $1. Run '$SCRIPT_NAME help db' for usage." ;;
+      *)
+        [[ -z "$branch" ]] || die "Unexpected argument: $1. Run '$SCRIPT_NAME help db' for usage."
+        branch="$1"
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$branch" ]] || die "Missing required argument: <branch>. Run '$SCRIPT_NAME help db' for usage."
+
+  resolve_project "$project_arg"
+  local proj_name="$REPLY_PROJECT_NAME"
+  local proj_path="$REPLY_PROJECT_PATH"
+  local folder
+  folder="$(safe_name "$branch")"
+  local worktree_path="$SPROUT_PROJECTS_ROOT/${proj_name}-worktrees/$folder"
+  [[ -d "$worktree_path" ]] || die "No worktree found for '$branch' in project '$proj_name'."
+
+  local wt_env="$worktree_path/.env"
+  local main_env="$proj_path/.env"
+  [[ -f "$wt_env" ]] || die "Worktree '$folder' has no .env."
+
+  local main_db
+  main_db="$(parse_env_value DB_DATABASE "$main_env")"
+  [[ -n "$main_db" ]] || die "The main project's .env has no DB_DATABASE — nothing to clone from."
+  local target="${main_db}_$(db_safe_name "$folder")"
+  [[ "$target" != "$main_db" ]] || die "Refusing to touch the main database '$main_db'."
+
+  command -v mysql > /dev/null 2>&1 || die "mysql is not installed."
+
+  local db_user db_pass db_host db_port
+  db_user="$(db_env DB_USERNAME "$wt_env" "$main_env")"
+  db_pass="$(db_env DB_PASSWORD "$wt_env" "$main_env")"
+  db_host="$(db_env DB_HOST "$wt_env" "$main_env")"
+  db_port="$(db_env DB_PORT "$wt_env" "$main_env")"
+  [[ -n "$db_user" ]] || die "No DB_USERNAME in the worktree's or the main project's .env."
+  export MYSQL_PWD="$db_pass"
+  local mysql_opts="-h${db_host:-127.0.0.1} -P${db_port:-3306} -u${db_user}"
+
+  case "$action" in
+    create)
+      echo "Creating database '$target'"
+      # shellcheck disable=SC2086
+      mysql $mysql_opts -e "CREATE DATABASE IF NOT EXISTS \`${target}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
+        || die2 "MySQL could not create '$target'."
+      local tables
+      # shellcheck disable=SC2086
+      tables="$(mysql $mysql_opts -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${target}';" 2>/dev/null || true)"
+      if [[ "${tables:-0}" =~ ^[0-9]+$ && "${tables:-0}" -gt 0 ]]; then
+        echo "Database '$target' already exists ($tables tables) — not cloning."
+      else
+        db_clone "$mysql_opts" "$main_db" "$target"
+      fi
+      ;;
+    refresh)
+      echo "Refreshing '$target' from '$main_db'"
+      # shellcheck disable=SC2086
+      mysql $mysql_opts -e "DROP DATABASE IF EXISTS \`${target}\`;" || die2 "MySQL could not drop '$target'."
+      # shellcheck disable=SC2086
+      mysql $mysql_opts -e "CREATE DATABASE \`${target}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" \
+        || die2 "MySQL could not create '$target'."
+      db_clone "$mysql_opts" "$main_db" "$target"
+      ;;
+    drop)
+      echo "Dropping database '$target'"
+      # shellcheck disable=SC2086
+      mysql $mysql_opts -e "DROP DATABASE IF EXISTS \`${target}\`;" || die2 "MySQL could not drop '$target'."
+      unset MYSQL_PWD
+      set_env_var DB_DATABASE "" "$wt_env"
+      echo "Dropped '$target'; DB_DATABASE cleared in the worktree .env."
+      return 0
+      ;;
+  esac
+
+  unset MYSQL_PWD
+  set_env_var DB_DATABASE "$target" "$wt_env"
+  set_env_var SPROUT_DB_FAILED "" "$wt_env"
+  echo "Updated .env: DB_DATABASE=$target"
+}
+
+# db_clone: copy the main database into the worktree one
+#   $1: mysql options  $2: source  $3: target
+db_clone() {
+  command -v mysqldump > /dev/null 2>&1 || die "mysqldump is not installed."
+  echo "Cloning data from '$2' into '$3'"
+  # shellcheck disable=SC2086
+  mysqldump $1 --single-transaction --set-gtid-purged=OFF "$2" | mysql $1 "$3" \
+    || die2 "Cloning '$2' into '$3' failed."
+}
+
 cmd_list() {
   local project_arg=""
 
@@ -1062,6 +1177,25 @@ EXIT CODES:
   1  At least one delete failed, or project not found
 EOF
       ;;
+    db)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME db <create|refresh|drop> <branch> [--project <name>]
+
+  Manages a worktree's own MySQL database, <main DB_DATABASE>_<folder>.
+  Never touches the main project's database.
+
+ACTIONS:
+  create    Create it if missing; clone the main database into it when it has
+            no tables yet. Points the worktree .env at it.
+  refresh   Drop it, create it again and clone the main database into it.
+  drop      Drop it and clear DB_DATABASE in the worktree .env.
+
+EXIT CODES:
+  0  Success
+  1  User error (no worktree, no main DB_DATABASE, mysql missing)
+  2  MySQL failed (the worktree .env is left unchanged)
+EOF
+      ;;
     delete)
       cat <<EOF
 COMMAND: $SCRIPT_NAME delete <branch-name> [options]
@@ -1140,6 +1274,7 @@ COMMANDS:
   create <branch>   Create a new branch and worktree
   delete <branch>   Remove a worktree, its git registration, database, and Redis keys
   clear             Remove every worktree of a project
+  db <action> <b>   Create / refresh / drop a worktree's database
   list              List all worktrees for a project
   status --json     Print all projects and worktrees as JSON
   help [command]    Show help for a specific command
@@ -1174,10 +1309,11 @@ For command-specific help:
   $SCRIPT_NAME help list
   $SCRIPT_NAME help status
   $SCRIPT_NAME help clear
+  $SCRIPT_NAME help db
 EOF
       ;;
     *)
-      die "Unknown help topic: '$topic'. Available: create, delete, clear, list, status"
+      die "Unknown help topic: '$topic'. Available: create, delete, clear, db, list, status"
       ;;
   esac
 }
@@ -1192,6 +1328,7 @@ main() {
     create)    cmd_create "$@" ;;
     delete)    cmd_delete "$@" ;;
     clear)     cmd_clear  "$@" ;;
+    db)        cmd_db     "$@" ;;
     list)      cmd_list   "$@" ;;
     status)    cmd_status "$@" ;;
     help)      cmd_help   "$@" ;;
