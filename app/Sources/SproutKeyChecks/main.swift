@@ -16,6 +16,12 @@ final class FixtureShell: Shell {
     init(_ json: String) { self.json = json }
     func run(_ command: String, onLine: @escaping (String) -> Void) async -> ShellResult {
         if command.contains("status") { statusCalls += 1 }
+        if command.contains(" create ") {
+            // A slow create (like copying vendor/): long enough to move around meanwhile.
+            onLine("Copying vendor from main project")
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            return ShellResult(exitCode: 0, stdout: "Created worktree")
+        }
         return ShellResult(exitCode: 0, stdout: json)
     }
 }
@@ -274,6 +280,20 @@ func keyChecks() async {
     checkEqual(store.selectedWorktreePath, pathY, "list keys work after ⌃`")
     await press(.up, window)
 
+    // Moving to another project while a command runs in the terminal
+    await shortcut("`", [.control], window)
+    _ = await waitUntil(2) { terminals.terminalHasFocus }
+    await type("sleep 20", into: window)
+    await press(.returnKey, window)
+    check(await waitUntil(3) { terminals.activeTab(for: pathX)?.isBusy == true }, "a command is running")
+    await shortcut("`", [.control], window)
+    _ = await waitUntil(2) { !terminals.terminalHasFocus }
+    await press(.right, window)
+    checkEqual(store.selectedProjectName, "other", "→ switches project while a command runs")
+    await press(.left, window)
+    checkEqual(store.selectedProjectName, "demo", "← switches back while a command runs")
+    check(terminals.activeTab(for: pathX)?.isBusy == true, "the command keeps running across project switches")
+
     // A form open while typing in the terminal
     await type("n", into: window)
     checkEqual(store.mode, .create, "n opens the form from the list")
@@ -296,6 +316,26 @@ func keyChecks() async {
     await press(.down, window)
     checkEqual(store.selectedWorktreePath, pathY, "list keys work after collapsing a focused terminal")
     UserDefaults.standard.set(false, forKey: "sprout.terminalCollapsed")
+
+    // Moving around while a create runs in the background (it used to lock everything)
+    await focusList()
+    store.selectProject("demo")
+    await type("n", into: window)
+    await pause(0.5)
+    await type("feature/bg", into: window)
+    send("\r", ignoring: "\r", code: 36, mods: [.command], to: window)   // ⌘⏎ create
+    check(await waitUntil(2) { store.isBusy }, "the create is running")
+    await press(.right, window)
+    checkEqual(store.selectedProjectName, "other", "→ moves to another project while a create runs")
+    checkEqual(store.mode, .list, "moving leaves the create form")
+    await press(.left, window)
+    await type("l", into: window)
+    checkEqual(store.mode, .activity, "l shows the running create's log")
+    check(store.log.contains("Copying vendor from main project"), "with its live output")
+    await press(.escape, window)
+    checkEqual(store.mode, .list, "esc leaves the log; the create keeps running")
+    check(await waitUntil(5) { !store.isBusy }, "the create finishes in the background")
+    checkEqual(store.operation, .succeeded, "and succeeds")
     Openers.intercept = nil
 }
 

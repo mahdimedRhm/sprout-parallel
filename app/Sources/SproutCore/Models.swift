@@ -34,6 +34,8 @@ public struct Worktree: Codable, Equatable, Hashable, Identifiable {
     public let herdUrl: String?
     public let serveUrl: String?
     public let serveRunning: Bool?
+    /// The worktree's own database couldn't be created at setup.
+    public let dbFailed: Bool?
 
     public var id: String { path }
     public var isDirty: Bool { changes > 0 }

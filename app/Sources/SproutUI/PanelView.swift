@@ -95,6 +95,8 @@ public struct PanelView: View {
             DeleteConfirm(worktree: worktree)
         case .clear(let project):
             ClearConfirm(project: project)
+        case .activity:
+            ActivityView()
         }
     }
 
@@ -173,10 +175,22 @@ public struct PanelView: View {
     /// re-took first responder from it.) Returns true when the key was used.
     private func handleListKey(_ event: NSEvent) -> Bool {
         guard let window = windowBox.window, event.window === window else { return false }
-        // Keys belong to the terminal, a text field being edited, or an open form.
-        guard store.mode == .list, !terminals.terminalHasFocus, !(window.firstResponder is NSText) else {
-            return false
+        guard !terminals.terminalHasFocus else { return false }   // keys belong to the shell
+
+        // Away from the list: the activity log, or a form whose operation is
+        // running in the background (its inputs are locked). Moving around or
+        // esc returns to the list; the operation keeps going.
+        if store.mode != .list {
+            guard store.mode == .activity || store.isBusy else { return false }   // an editable form
+            let navigation: Set<UInt16> = [123, 124, 125, 126]
+            if event.keyCode == 53 {
+                store.backToList()
+                return true
+            }
+            guard navigation.contains(event.keyCode) else { return false }
+            store.backToList()
         }
+        guard !(window.firstResponder is NSText) else { return false }   // a text field is being edited
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers.isDisjoint(with: [.command, .control, .option]) else { return false }
         let shift = modifiers.contains(.shift)
@@ -230,6 +244,8 @@ public struct PanelView: View {
             Task { await store.refresh() }
         case "?":
             store.showingKeys = true
+        case "l":
+            store.showActivity()
         default:
             return false
         }

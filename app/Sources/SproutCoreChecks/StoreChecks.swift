@@ -11,6 +11,62 @@ func storeChecks() async {
     await busyDuringReloadChecks()
     await clearChecks()
     await navigationChecks()
+    await backgroundChecks()
+}
+
+/// Operations keep running while the user moves around.
+@MainActor
+private func backgroundChecks() async {
+    var branches = ["feature/a"]
+    let shell = FakeShell { command in
+        if command.contains(" create ") {
+            branches.append("feature/new")
+            return ShellResult(exitCode: 0, stdout: "Created worktree\n")
+        }
+        return ShellResult(exitCode: 0, stdout: statusJSON(branches))
+    }
+    let store = WorktreeStore(cli: SproutCLI(shell: shell))
+    await store.refresh()
+    shell.delayNanos = 300_000_000
+
+    store.beginCreate()
+    let running = Task { await store.create(branch: "feature/new", base: "main", runSetup: true) }
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    check(store.isBusy, "create is running")
+    checkEqual(store.activity, WorktreeStore.Activity(kind: .create(branch: "feature/new"), project: "scooda"),
+               "the running operation is described")
+    checkEqual(store.activity?.runningTitle, "creating feature/new in scooda", "running title")
+
+    store.backToList()
+    checkEqual(store.mode, .list, "you can leave the form while it runs")
+    check(store.isBusy, "the operation keeps running in the background")
+    check(!store.log.isEmpty, "its log is kept")
+    store.moveProject(by: 1)
+    checkEqual(store.selectedProjectName, "prayercal", "you can move to another project while it runs")
+    store.beginCreate()
+    checkEqual(store.mode, .list, "a second operation can't start while one runs")
+
+    store.showActivity()
+    checkEqual(store.mode, .activity, "the running operation's log can be reopened")
+    store.backToList()
+
+    await running.value
+    checkEqual(store.operation, .succeeded, "the background operation finishes")
+    checkEqual(store.activity?.doneTitle, "created feature/new", "done title")
+    checkEqual(store.selectedProjectName, "prayercal", "finishing doesn't yank you back to its project")
+    store.showActivity()
+    checkEqual(store.mode, .activity, "the finished operation's log can be reopened")
+    check(store.log.contains("Created worktree"), "with its output")
+    store.backToList()
+
+    // Still on the same project: the new worktree gets selected
+    store.selectProject("scooda")
+    shell.delayNanos = 0
+    branches = ["feature/a"]
+    store.beginCreate()
+    await store.create(branch: "feature/other", base: "main", runSetup: true)
+    checkEqual(WorktreeStore.Activity(kind: .delete(branch: "x"), project: "p").failedTitle, "delete failed", "failed title")
+    checkEqual(WorktreeStore.Activity(kind: .clear, project: "p").runningTitle, "clearing p", "clear title")
 }
 
 @MainActor
@@ -122,8 +178,13 @@ private func createChecks() async {
 
     store.backToList()
     checkEqual(store.mode, .list, "backToList returns to list")
-    checkEqual(store.log, [], "backToList clears log")
-    checkEqual(store.operation, .idle, "backToList resets operation")
+    check(!store.log.isEmpty, "backToList keeps the last log for the header")
+    checkEqual(store.operation, .succeeded, "backToList keeps the last outcome")
+    store.beginCreate()
+    checkEqual(store.log, [], "starting a new operation clears the old log")
+    checkEqual(store.operation, .idle, "starting a new operation resets the outcome")
+    checkEqual(store.activity, nil, "starting a new operation clears the old activity")
+    store.backToList()
 
     store.beginCreate()
     await store.create(branch: "feature/taken", base: "main", runSetup: false)
@@ -214,10 +275,11 @@ private func busyDuringReloadChecks() async {
     check(shell.commands.last == "sprout-parallel status --json", "post-op reload is in flight")
     check(store.isBusy, "busy during post-op reload")
     store.backToList()
-    checkEqual(store.mode, .create, "backToList ignored during post-op reload")
+    checkEqual(store.mode, .list, "leaving the form during post-op reload is allowed")
+    check(store.isBusy, "the operation is still busy after leaving the form")
     check(!store.log.isEmpty, "log kept during post-op reload")
     store.beginDelete()
-    checkEqual(store.mode, .create, "beginDelete ignored during post-op reload")
+    checkEqual(store.mode, .list, "beginDelete ignored during post-op reload")
     await task.value
     check(!store.isBusy, "not busy after reload finishes")
     checkEqual(store.operation, .succeeded, "operation succeeded after reload")

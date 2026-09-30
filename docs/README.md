@@ -256,6 +256,18 @@ and whether the serve port is running.
 Click the leaf in the menu bar to show or hide the Sprout window. Drag its
 background to move it and its edges to resize it; it remembers where you left it.
 
+### Background operations
+
+Create, delete and clear keep running while you move around — switch projects,
+use terminals, anything. The header shows progress (`◌ creating feature/x in
+scooda…`, then `✓ created` / `✗ create failed`); click it or press `l` for the
+live log.
+
+If a worktree's own MySQL database can't be created (e.g. access denied), its
+`.env` gets `DB_DATABASE` cleared — so it can't silently use the main project's
+database — the create output ends with a warning, and Sprout shows
+`mysql ✗ not created` for it.
+
 ### Terminals
 
 Every worktree has its own terminal tabs below its details, running your login
@@ -291,6 +303,7 @@ Press `?` in Sprout for this list.
 | `⌫` | delete the selected worktree |
 | `⇧X` | clear all worktrees of the selected project |
 | `r` / `⌘R` | refresh |
+| `l` | log of the running / last create, delete or clear |
 | `?` | keyboard cheat sheet |
 | ``⌃` `` | focus the terminal / back to the list |
 | `⌘T` / `⌘⇧W` (or `×`) | new terminal tab / close tab |
@@ -310,4 +323,5 @@ swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
 bash ../tests/status_test.sh # status --json tests
 bash ../tests/clear_test.sh  # clear tests
 bash ../tests/serve_test.sh  # port + Herd link tests
+bash ../tests/db_setup_test.sh # failed database clone never points at the main DB
 ```
