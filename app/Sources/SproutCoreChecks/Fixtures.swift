@@ -1,3 +1,4 @@
+import CheckKit
 import Foundation
 
 /// Hand-written `status --json` output covering every field shape.
