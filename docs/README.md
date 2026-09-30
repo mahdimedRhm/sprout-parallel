@@ -256,6 +256,16 @@ and whether the serve port is running.
 Click the leaf in the menu bar to show or hide the Sprout window. Drag its
 background to move it and its edges to resize it; it remembers where you left it.
 
+### Terminals
+
+Every worktree has its own terminal tabs below its details, running your login
+shell (`zsh -l`, so `~/.zshrc` applies) in the worktree folder. Switching
+worktree switches terminals; the others keep running. Drag the divider to
+resize; ``⌃` `` hides/shows it and moves focus between the list and the
+terminal. While the terminal has focus every key goes to the shell. Terminals
+of deleted worktrees are closed, and quitting Sprout warns if a command is still
+running.
+
 ### Install
 
 Requires macOS 14+ and the Xcode Command Line Tools (`xcode-select --install`).
@@ -278,6 +288,8 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 | `n` | new worktree in the selected project |
 | `⌫` | delete the selected worktree |
 | `⇧X` | clear all worktrees of the selected project |
+| ``⌃` `` | focus the terminal / back to the list |
+| `⌘T` / `⌘⇧W` | new terminal tab / close tab |
 | `r` | refresh |
 | `⌘⏎` / `esc` | confirm / back (in forms) |
 | `esc` / `⌘W` | hide the window (in the list) |
@@ -287,6 +299,7 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 ```bash
 cd app
 swift run SproutCoreChecks   # logic checks (no Xcode needed)
+swift run SproutTerminalChecks # terminal sessions + live zsh checks
 swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
 bash ../tests/status_test.sh # status --json tests
 bash ../tests/clear_test.sh  # clear tests
