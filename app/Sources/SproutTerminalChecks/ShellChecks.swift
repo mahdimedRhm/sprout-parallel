@@ -64,8 +64,11 @@ func shellChecks() async {
     }
     var otherExited = false
     other.onExit = { otherExited = true }
+    let pid = other.terminalView.process.shellPid
     other.terminate()
     _ = await waitUntil(1.5) { otherExited }
     check(!otherExited, "terminate() doesn't report an exit")
     check(!other.isBusy, "a terminated shell is not busy")
+    // A zombie still answers kill(pid, 0) == 0; only a reaped process gives ESRCH.
+    check(await waitUntil(5) { kill(pid, 0) == -1 && errno == ESRCH }, "terminate() reaps the shell (no zombie)")
 }
