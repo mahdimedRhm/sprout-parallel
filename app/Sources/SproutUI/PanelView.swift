@@ -1,10 +1,13 @@
 import AppKit
 import SproutCore
+import SproutTerminal
 import SwiftUI
 
 public struct PanelView: View {
     @EnvironmentObject private var store: WorktreeStore
     @FocusState private var focused: Bool
+    @EnvironmentObject private var terminals: TerminalSessions
+    @AppStorage("sprout.terminalCollapsed") private var terminalCollapsed = false
 
     public static let minimumSize = CGSize(width: 620, height: 400)
 
@@ -20,9 +23,13 @@ public struct PanelView: View {
                 HStack(spacing: 0) {
                     ProjectSidebar().frame(width: 170)
                     Hairline(vertical: true)
-                    content
-                        .padding(12)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    SplitPane {
+                        content
+                            .padding(12)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } bottom: {
+                        TerminalPane()
+                    }
                 }
             }
             if let error = store.error {
@@ -42,6 +49,7 @@ public struct PanelView: View {
         .focusEffectDisabled()
         .focused($focused)
         .onKeyPress(action: handleKey)
+        .background { terminalShortcuts }
         .onChange(of: store.mode) { _, mode in
             focused = mode == .list
         }
@@ -67,6 +75,60 @@ public struct PanelView: View {
             DeleteConfirm(worktree: worktree)
         case .clear(let project):
             ClearConfirm(project: project)
+        }
+    }
+
+    /// Window-level shortcuts: they fire even while the terminal has focus.
+    private var terminalShortcuts: some View {
+        ZStack {
+            Button("", action: toggleTerminalFocus).keyboardShortcut("`", modifiers: .control)
+            Button("", action: newTerminalTab).keyboardShortcut("t", modifiers: .command)
+            Button("", action: closeTerminalTab).keyboardShortcut("w", modifiers: [.command, .shift])
+        }
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var terminalPath: String? { store.selectedWorktree?.path }
+
+    private func toggleTerminalFocus() {
+        guard let path = terminalPath else { return }
+        if let view = terminals.activeTab(for: path)?.view, view.window?.firstResponder === view {
+            view.window?.makeFirstResponder(nil)
+            focused = true
+            return
+        }
+        terminalCollapsed = false
+        terminals.ensureTab(in: path)
+        focusTerminal(in: path)
+    }
+
+    private func newTerminalTab() {
+        guard let path = terminalPath else { return }
+        terminalCollapsed = false
+        terminals.openTab(in: path)
+        focusTerminal(in: path)
+    }
+
+    private func closeTerminalTab() {
+        guard let path = terminalPath, let tab = terminals.activeTab(for: path) else { return }
+        if tab.isBusy {
+            let alert = NSAlert()
+            alert.messageText = "Close “\(tab.title)”?"
+            alert.informativeText = "It's still running. Closing the tab stops it."
+            alert.addButton(withTitle: "Close Tab")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        terminals.closeTab(tab.id, in: path)
+    }
+
+    private func focusTerminal(in path: String) {
+        // The view is attached to the window on the next layout pass.
+        DispatchQueue.main.async {
+            guard let view = terminals.activeTab(for: path)?.view else { return }
+            view.window?.makeFirstResponder(view)
         }
     }
 

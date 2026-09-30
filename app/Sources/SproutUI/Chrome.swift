@@ -187,7 +187,8 @@ struct FooterBar: View {
              Hint(key: "f", label: "finder"), Hint(key: "o", label: "open"),
              Hint(key: "n", label: "new"),
              Hint(key: "⌫", label: "delete"), Hint(key: "⇧X", label: "clear all"),
-             Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move")]
+             Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move"),
+             Hint(key: "⌃`", label: "terminal"), Hint(key: "⌘T", label: "tab")]
         case .create:
             [Hint(key: "⌘⏎", label: "create", primary: true), Hint(key: "esc", label: "back")]
         case .delete:

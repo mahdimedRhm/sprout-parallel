@@ -1,5 +1,6 @@
 import AppKit
 import SproutCore
+import SproutTerminal
 import SproutUI
 import SwiftUI
 
@@ -18,6 +19,23 @@ final class FixtureShell: Shell {
         }
         return result
     }
+}
+
+/// Terminal stand-in for snapshots (the AppKit terminal doesn't render in ImageRenderer).
+@MainActor
+final class SnapshotTerminal: TerminalHandle {
+    let id = UUID()
+    let title: String
+    let isBusy: Bool
+    var view: NSView? { nil }
+    var onExit: (() -> Void)?
+
+    init(title: String = "zsh", busy: Bool = false) {
+        self.title = title
+        self.isBusy = busy
+    }
+
+    func terminate() {}
 }
 
 let fixture = #"""
@@ -50,8 +68,10 @@ func makeStore(_ respond: @escaping (String) -> ShellResult) async -> WorktreeSt
 }
 
 @MainActor
-func render(_ name: String, _ store: WorktreeStore) {
-    let renderer = ImageRenderer(content: PanelView().environmentObject(store).frame(width: 900, height: 640))
+func render(_ name: String, _ store: WorktreeStore, terminals: TerminalSessions? = nil) {
+    let terminals = terminals ?? TerminalSessions { _ in SnapshotTerminal() }
+    let renderer = ImageRenderer(
+        content: PanelView().environmentObject(store).environmentObject(terminals).frame(width: 900, height: 640))
     renderer.scale = 2
     guard let image = renderer.nsImage,
           let tiff = image.tiffRepresentation,
@@ -139,3 +159,16 @@ if case .clear(let project) = clearFail.mode {
     await clearFail.clear(project, force: false, dropData: true)
 }
 render("clear-done", clearFail)
+
+let withTerminals = await makeStore(ok)
+var nextTitles = [("php", true), ("npm", true), ("zsh", false)]
+let busyTerminals = TerminalSessions { _ in
+    let (title, busy) = nextTitles.isEmpty ? ("zsh", false) : nextTitles.removeFirst()
+    return SnapshotTerminal(title: title, busy: busy)
+}
+if let path = withTerminals.selectedWorktree?.path {
+    busyTerminals.openTab(in: path)
+    busyTerminals.openTab(in: path)
+    busyTerminals.openTab(in: path)
+}
+render("terminal-tabs", withTerminals, terminals: busyTerminals)

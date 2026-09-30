@@ -10,11 +10,11 @@ let package = Package(
     targets: [
         .target(name: "SproutCore"),
         .target(name: "SproutTerminal", dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")]),
-        .target(name: "SproutUI", dependencies: ["SproutCore"]),
+        .target(name: "SproutUI", dependencies: ["SproutCore", "SproutTerminal"]),
         .target(name: "CheckKit"),
-        .executableTarget(name: "Sprout", dependencies: ["SproutCore", "SproutUI"]),
+        .executableTarget(name: "Sprout", dependencies: ["SproutCore", "SproutUI", "SproutTerminal"]),
         .executableTarget(name: "SproutCoreChecks", dependencies: ["SproutCore", "CheckKit"]),
         .executableTarget(name: "SproutTerminalChecks", dependencies: ["SproutTerminal", "CheckKit"]),
-        .executableTarget(name: "SproutSnapshots", dependencies: ["SproutCore", "SproutUI"]),
+        .executableTarget(name: "SproutSnapshots", dependencies: ["SproutCore", "SproutUI", "SproutTerminal"]),
     ]
 )
