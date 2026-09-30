@@ -17,7 +17,7 @@ mkdir "$STUBS"
 : > "$CALLS"
 cat > "$STUBS/mysql" <<STUB
 #!/bin/sh
-echo "mysql \$*" >> "$CALLS"
+echo "mysql \$* pwd=\$MYSQL_PWD" >> "$CALLS"
 case "\$*" in
   *"SELECT COUNT"*) cat "$ROOT/tables" 2>/dev/null || echo 0 ;;
   *"CREATE DATABASE"*)
@@ -53,7 +53,7 @@ mkdir "$ROOT/eta"
 git -C "$ROOT/eta" init -q -b main
 git -C "$ROOT/eta" commit -q --allow-empty -m init
 printf '.env\n' > "$ROOT/eta/.git/info/exclude"
-printf 'DB_CONNECTION=mysql\nDB_DATABASE=eta\nDB_USERNAME=root\nDB_PASSWORD=pw\n' > "$ROOT/eta/.env"
+printf 'DB_CONNECTION=mysql\nDB_DATABASE=eta\nDB_USERNAME="root"\nDB_PASSWORD="pw"\n' > "$ROOT/eta/.env"
 "$SP" create feature/a --project eta --no-setup > /dev/null 2>&1
 # As if setup had failed: DB_DATABASE cleared, marker set, no DB_USERNAME
 printf 'DB_CONNECTION=mysql\nDB_DATABASE=\nSPROUT_DB_FAILED=1\n' > "$WT/.env"
@@ -66,7 +66,8 @@ assert_contains "$(cat "$CALLS")" 'CREATE DATABASE IF NOT EXISTS `eta_feature_a`
 assert_contains "$(cat "$CALLS")" "import: DUMP OF eta" "create clones main into it"
 assert_eq "$(env_of DB_DATABASE)" "eta_feature_a" "create repairs an emptied DB_DATABASE"
 assert_eq "$(env_of SPROUT_DB_FAILED)" "" "create clears the failure marker"
-assert_contains "$(cat "$CALLS")" "-uroot" "credentials fall back to the main project's .env"
+assert_contains "$(cat "$CALLS")" "-uroot " "credentials fall back to the main project's .env, unquoted user"
+assert_contains "$(cat "$CALLS")" "pwd=pw" "unquoted password reaches mysql"
 
 : > "$CALLS"; echo 5 > "$ROOT/tables"
 out="$("$SP" db create feature/a --project eta 2>&1)"
@@ -105,7 +106,7 @@ printf 'DB_CONNECTION=mysql\nDB_USERNAME=root\n' > "$ROOT/eta/.env"
 rc=0; out="$("$SP" db create feature/a --project eta 2>&1)" || rc=$?
 assert_eq "$rc" "1" "no main DB_DATABASE → exit 1"
 assert_contains "$out" "Error:" "…with an Error: line"
-printf 'DB_CONNECTION=mysql\nDB_DATABASE=eta\nDB_USERNAME=root\nDB_PASSWORD=pw\n' > "$ROOT/eta/.env"
+printf 'DB_CONNECTION=mysql\nDB_DATABASE=eta\nDB_USERNAME="root"\nDB_PASSWORD="pw"\n' > "$ROOT/eta/.env"
 
 rc=0; "$SP" db explode feature/a --project eta > /dev/null 2>&1 || rc=$?
 assert_eq "$rc" "1" "unknown action exits 1"
