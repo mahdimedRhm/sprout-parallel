@@ -119,6 +119,36 @@ Deleted worktree 'feature-my-thing'
 
 ---
 
+### `clear` — Delete every worktree of a project
+
+```
+sprout-parallel clear [--project <name>] [--force] [--keep-db]
+```
+
+Runs `delete` on each of the project's worktrees. Worktrees with uncommitted
+changes are skipped unless `--force` is given, and a failing delete doesn't stop
+the others. Branches are kept.
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--project <name>` | No | Auto-detected | Project name. |
+| `--force` | No | off | Also delete worktrees with uncommitted changes. |
+| `--keep-db` | No | off | Don't drop databases or clear Redis keys. |
+
+**Output:**
+
+```
+Skipped 'feature-wip' (uncommitted changes — use --force to delete it)
+Deleted worktree 'feature-my-thing'
+  ...
+
+cleared 1 · skipped 1 · failed 0
+```
+
+Exits 1 if any delete failed.
+
+---
+
 ### `list` — List worktrees
 
 ```
@@ -209,3 +239,56 @@ sprout-parallel delete feature/user-profile
 | `0` | Success |
 | `1` | User error (bad arguments, entity not found, pre-condition not met) |
 | `2` | Internal / git failure |
+
+---
+
+## Sprout menu bar app
+
+A terminal-styled macOS menu bar app for viewing and managing worktrees across
+every project under `$SPROUT_PROJECTS_ROOT`. It drives the `sprout-parallel`
+CLI (`status --json`, `create`, `delete`), so both always agree.
+
+Each new worktree gets its own `php artisan serve` port (`SERVER_PORT`, from 8001)
+and, when the main project is linked in Herd, its own Herd site
+(`https://<project>-<branch>.test`); `delete` unlinks it. Sprout shows both URLs
+and whether the serve port is running.
+
+Click the leaf in the menu bar to show or hide the Sprout window. Drag its
+background to move it and its edges to resize it; it remembers where you left it.
+
+### Install
+
+Requires macOS 14+ and the Xcode Command Line Tools (`xcode-select --install`).
+
+```bash
+bash install.sh          # the app runs sprout-parallel via `zsh -lic`, so PATH set in ~/.zshrc applies
+bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
+```
+
+### Keys
+
+| Key | Action |
+|---|---|
+| `↑` `↓` | select worktree |
+| `⇧↑` `⇧↓` | select project |
+| `⏎` | open in VS Code |
+| `t` | open in Warp |
+| `f` | reveal in Finder |
+| `o` / `⇧O` | open the Herd URL / the `php artisan serve` URL |
+| `n` | new worktree in the selected project |
+| `⌫` | delete the selected worktree |
+| `⇧X` | clear all worktrees of the selected project |
+| `r` | refresh |
+| `⌘⏎` / `esc` | confirm / back (in forms) |
+| `esc` / `⌘W` | hide the window (in the list) |
+
+### Development
+
+```bash
+cd app
+swift run SproutCoreChecks   # logic checks (no Xcode needed)
+swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
+bash ../tests/status_test.sh # status --json tests
+bash ../tests/clear_test.sh  # clear tests
+bash ../tests/serve_test.sh  # port + Herd link tests
+```

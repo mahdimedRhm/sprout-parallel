@@ -39,7 +39,30 @@ db_safe_name() {
 #   $1: variable name (e.g. DB_DATABASE)
 #   $2: path to .env file
 parse_env_var() {
-  grep "^${1}=" "$2" 2>/dev/null | head -1 | cut -d= -f2-
+  { grep "^${1}=" "$2" 2>/dev/null || true; } | head -1 | cut -d= -f2-
+}
+
+# parse_env_value: like parse_env_var, but strips surrounding quotes and
+# treats Laravel's literal "null" as empty
+parse_env_value() {
+  local value
+  value="$(parse_env_var "$1" "$2")"
+  value="${value#\"}"; value="${value%\"}"
+  value="${value#\'}"; value="${value%\'}"
+  [[ "$value" == "null" ]] && value=""
+  echo "$value"
+}
+
+# set_env_var: replace KEY=... in a .env file, or append it if missing
+#   $1: variable name  $2: value  $3: path to .env file
+set_env_var() {
+  local key="$1" value="$2" file="$3"
+  if grep -q "^${key}=" "$file"; then
+    sed -i '' "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    [[ -s "$file" && -n "$(tail -c 1 "$file")" ]] && echo >> "$file"
+    echo "${key}=${value}" >> "$file"
+  fi
 }
 
 # resolve_project: set REPLY_PROJECT_NAME and REPLY_PROJECT_PATH
@@ -154,6 +177,7 @@ setup_db() {
 
 drop_worktree_db() {
   local env_file="$1"
+  local main_env_file="$2"
 
   [[ -f "$env_file" ]] || return 0
   command -v mysql > /dev/null 2>&1 || return 0
@@ -170,12 +194,230 @@ drop_worktree_db() {
 
   [[ -n "$wt_db" && -n "$db_user" ]] || return 0
 
+  # A worktree whose DB clone failed at create still points at the main
+  # project's database — never drop that one.
+  if [[ -f "$main_env_file" && "$wt_db" == "$(parse_env_var DB_DATABASE "$main_env_file")" ]]; then
+    echo "  Warning: '$wt_db' is the main project's database — not dropping it."
+    return 0
+  fi
+
   export MYSQL_PWD="$db_pass"
   echo "  → Dropping database '$wt_db'"
   mysql "-h${db_host}" "-P${db_port}" "-u${db_user}" \
     -e "DROP DATABASE IF EXISTS \`${wt_db}\`;" 2>&1 \
     || echo "  Warning: Failed to drop database '$wt_db'."
   unset MYSQL_PWD
+}
+
+# redis_cli: run redis-cli against the Redis server configured in a .env file
+#   $1: path to .env file; remaining args are passed to redis-cli
+redis_cli() {
+  local env_file="$1"
+  shift
+  local host port pass
+  host="$(parse_env_value REDIS_HOST "$env_file")"
+  port="$(parse_env_value REDIS_PORT "$env_file")"
+  pass="$(parse_env_value REDIS_PASSWORD "$env_file")"
+
+  if [[ -n "$pass" ]]; then
+    REDISCLI_AUTH="$pass" redis-cli -h "${host:-127.0.0.1}" -p "${port:-6379}" "$@"
+  else
+    redis-cli -h "${host:-127.0.0.1}" -p "${port:-6379}" "$@"
+  fi
+}
+
+# allocate_redis_db: print the lowest Redis DB index not used by any project
+# or worktree under $SPROUT_PROJECTS_ROOT. 0 and 1 are reserved for the main
+# projects (Laravel's REDIS_DB / REDIS_CACHE_DB defaults). Returns 1 if none free.
+#   $1: path to .env file (used to ask Redis how many databases it has)
+allocate_redis_db() {
+  local env_file="$1"
+  local max=""
+
+  if command -v redis-cli > /dev/null 2>&1; then
+    max="$(redis_cli "$env_file" CONFIG GET databases 2>/dev/null | sed -n 2p || true)"
+  fi
+  [[ "$max" =~ ^[0-9]+$ ]] || max=16
+
+  local used=" 0 1 " f key value
+  for f in "$SPROUT_PROJECTS_ROOT"/*/.env "$SPROUT_PROJECTS_ROOT"/*-worktrees/*/.env; do
+    [[ -f "$f" ]] || continue
+    for key in REDIS_DB REDIS_CACHE_DB; do
+      value="$(parse_env_value "$key" "$f")"
+      [[ "$value" =~ ^[0-9]+$ ]] && used="$used$value "
+    done
+  done
+
+  local n
+  for ((n = 2; n < max; n++)); do
+    if [[ "$used" != *" $n "* ]]; then
+      echo "$n"
+      return 0
+    fi
+  done
+  return 1
+}
+
+setup_redis() {
+  local dir="$1"
+  local proj_name="$2"
+  local folder_name="$3"
+  local env_file="$dir/.env"
+
+  [[ -f "$env_file" ]] || return 0
+  grep -q "^REDIS_" "$env_file" || return 0
+
+  local prefix
+  prefix="$(db_safe_name "${proj_name}_${folder_name}" | tr '[:upper:]' '[:lower:]')_"
+
+  set_env_var REDIS_PREFIX "$prefix" "$env_file"
+  set_env_var CACHE_PREFIX "${prefix}cache_" "$env_file"
+  set_env_var HORIZON_PREFIX "${prefix}horizon:" "$env_file"
+  echo "  → Updated .env: REDIS_PREFIX=${prefix} (plus CACHE_PREFIX, HORIZON_PREFIX)"
+
+  local redis_db
+  if redis_db="$(allocate_redis_db "$env_file")"; then
+    set_env_var REDIS_DB "$redis_db" "$env_file"
+    set_env_var REDIS_CACHE_DB "$redis_db" "$env_file"
+    echo "  → Updated .env: REDIS_DB=${redis_db}, REDIS_CACHE_DB=${redis_db}"
+  else
+    echo "  Warning: No free Redis database index — worktree shares the main DB (isolated by prefix only)."
+  fi
+}
+
+clear_worktree_redis() {
+  local env_file="$1"
+
+  [[ -f "$env_file" ]] || return 0
+  command -v redis-cli > /dev/null 2>&1 || return 0
+
+  local prefix redis_db
+  prefix="$(parse_env_value REDIS_PREFIX "$env_file")"
+  redis_db="$(parse_env_value REDIS_DB "$env_file")"
+  redis_db="${redis_db:-0}"
+
+  # Only clear worktrees that sprout-parallel gave their own prefix
+  [[ -n "$prefix" ]] || return 0
+
+  local host port pass
+  host="$(parse_env_value REDIS_HOST "$env_file")"
+  port="$(parse_env_value REDIS_PORT "$env_file")"
+  pass="$(parse_env_value REDIS_PASSWORD "$env_file")"
+  local cli=(redis-cli -h "${host:-127.0.0.1}" -p "${port:-6379}" -n "$redis_db")
+
+  [[ -n "$pass" ]] && export REDISCLI_AUTH="$pass"
+  echo "  → Clearing Redis keys '${prefix}*' in DB ${redis_db}"
+  "${cli[@]}" --scan --pattern "${prefix}*" \
+    | tr '\n' '\0' \
+    | xargs -0 -n 500 "${cli[@]}" unlink > /dev/null \
+    || echo "  Warning: Failed to clear Redis keys for '${prefix}'."
+  unset REDISCLI_AUTH
+}
+
+# port_listening: true if something is listening on TCP port $1
+port_listening() {
+  command -v lsof > /dev/null 2>&1 || return 1
+  lsof -nP "-iTCP:$1" -sTCP:LISTEN -t > /dev/null 2>&1
+}
+
+# allocate_serve_port: print the lowest port from 8001 that no worktree's
+# SERVER_PORT claims and nothing is listening on. Returns 1 if none free.
+allocate_serve_port() {
+  local used=" " f value port
+  for f in "$SPROUT_PROJECTS_ROOT"/*-worktrees/*/.env; do
+    [[ -f "$f" ]] || continue
+    value="$(parse_env_value SERVER_PORT "$f")"
+    [[ "$value" =~ ^[0-9]+$ ]] && used="$used$value "
+  done
+
+  for ((port = 8001; port < 9000; port++)); do
+    [[ "$used" == *" $port "* ]] && continue
+    port_listening "$port" && continue
+    echo "$port"
+    return 0
+  done
+  return 1
+}
+
+# herd_site_for: print "<ssl-flag>|<php-version>" for the Herd link serving
+# the directory $1, or return 1 if Herd doesn't serve it
+herd_site_for() {
+  command -v herd > /dev/null 2>&1 || return 1
+  local row
+  row="$( { herd links 2>/dev/null || true; } | awk -F'|' -v path="$1" '
+    NF > 6 {
+      for (i = 2; i <= 6; i++) gsub(/^ +| +$/, "", $i)
+      if ($5 == path) { print $3 "|" $6; exit }
+    }')"
+  [[ -n "$row" ]] || return 1
+  echo "$row"
+}
+
+# setup_serve: give the worktree its own `php artisan serve` port and, when the
+# main project is linked in Herd, its own Herd site; point APP_URL at it
+setup_serve() {
+  local dir="$1"
+  local proj_name="$2"
+  local proj_path="$3"
+  local folder_name="$4"
+  local env_file="$dir/.env"
+
+  [[ -f "$env_file" ]] || return 0
+
+  local port app_url=""
+  if port="$(allocate_serve_port)"; then
+    set_env_var SERVER_PORT "$port" "$env_file"
+    app_url="http://127.0.0.1:$port"
+    echo "  → Updated .env: SERVER_PORT=$port (php artisan serve)"
+  else
+    echo "  Warning: No free port in 8001-8999 — SERVER_PORT not set."
+  fi
+
+  local herd_info
+  if herd_info="$(herd_site_for "$proj_path")"; then
+    local site tld ssl php flags="" scheme="http"
+    site="$(echo "${proj_name}-${folder_name}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
+    tld="$(herd tld 2>/dev/null || true)"
+    tld="${tld:-test}"
+    ssl="${herd_info%%|*}"
+    php="${herd_info#*|}"
+    if [[ -n "$ssl" ]]; then
+      flags+=" --secure"
+      scheme="https"
+    fi
+    [[ -n "$php" ]] && flags+=" --isolate=$php"
+
+    echo "  → Linking in Herd as ${scheme}://${site}.${tld}"
+    # shellcheck disable=SC2086
+    if (cd "$dir" && herd link "$site" $flags > /dev/null 2>&1); then
+      set_env_var SPROUT_HERD_URL "${scheme}://${site}.${tld}" "$env_file"
+      app_url="${scheme}://${site}.${tld}"
+    else
+      echo "  Warning: herd link failed — use php artisan serve instead."
+    fi
+  fi
+
+  if [[ -n "$app_url" ]]; then
+    set_env_var APP_URL "$app_url" "$env_file"
+    echo "  → Updated .env: APP_URL=$app_url"
+  fi
+}
+
+# unlink_worktree_herd: remove the Herd site that setup_serve created, if any
+unlink_worktree_herd() {
+  local env_file="$1"
+
+  [[ -f "$env_file" ]] || return 0
+  command -v herd > /dev/null 2>&1 || return 0
+
+  local url site
+  url="$(parse_env_value SPROUT_HERD_URL "$env_file")"
+  [[ -n "$url" ]] || return 0
+  site="${url#*://}"
+  site="${site%.*}"
+
+  echo "  → Unlinking Herd site '$site'"
+  herd unlink "$site" > /dev/null 2>&1 || echo "  Warning: herd unlink '$site' failed."
 }
 
 run_setup() {
@@ -204,6 +446,16 @@ run_setup() {
   if [[ -n "$folder_name" ]]; then
     setup_db "$dir" "$folder_name"
     ran_any=true
+  fi
+
+  # Redis: own key prefix and DB index so queues/cache don't mix with main
+  if [[ -n "$proj_path" && -n "$folder_name" ]]; then
+    setup_redis "$dir" "$(basename "$proj_path")" "$folder_name"
+  fi
+
+  # Serving: own artisan-serve port and, if the project is in Herd, own site
+  if [[ -n "$proj_path" && -n "$folder_name" ]]; then
+    setup_serve "$dir" "$(basename "$proj_path")" "$proj_path" "$folder_name"
   fi
 
   # PHP / Composer
@@ -254,6 +506,131 @@ run_setup() {
   if [[ "$ran_any" == false ]]; then
     echo "  (nothing to set up)"
   fi
+}
+
+# ─── Status (JSON) ────────────────────────────────────────────────────────────
+
+# json_escape: escape a string for use inside a JSON string literal.
+# Escapes \ " newline tab CR; strips other ASCII control characters.
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037'
+}
+
+json_str() {
+  printf '"%s"' "$(json_escape "$1")"
+}
+
+json_str_or_null() {
+  if [[ -n "$1" ]]; then json_str "$1"; else printf 'null'; fi
+}
+
+json_int_or_null() {
+  if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s' "$((10#$1))"; else printf 'null'; fi
+}
+
+# worktree_json: print one worktree as a JSON object
+#   $1: main project path
+#   $2: worktree path (trailing slash allowed)
+worktree_json() {
+  local proj_path="$1"
+  local wt="${2%/}"
+  local env_file="$wt/.env"
+
+  local branch base changes
+  branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+  base="$(git -C "$proj_path" config --get "branch.${branch}.sproutBase" 2>/dev/null || true)"
+  base="${base:-main}"
+  changes="$( { git -C "$wt" status --porcelain 2>/dev/null || true; } | wc -l | tr -d ' ')"
+
+  local base_ref="" ahead="" behind="" counts=""
+  if git -C "$wt" rev-parse --verify -q "refs/heads/$base" > /dev/null 2>&1; then
+    base_ref="refs/heads/$base"
+  elif git -C "$wt" rev-parse --verify -q "refs/remotes/origin/$base" > /dev/null 2>&1; then
+    base_ref="refs/remotes/origin/$base"
+  fi
+  if [[ -n "$base_ref" ]]; then
+    counts="$(git -C "$wt" rev-list --left-right --count "${base_ref}...HEAD" 2>/dev/null || true)"
+    if [[ -n "$counts" ]]; then
+      behind="$(echo "$counts" | awk '{print $1}')"
+      ahead="$(echo "$counts" | awk '{print $2}')"
+    fi
+  fi
+
+  local last="null" hash subject when
+  hash="$(git -C "$wt" log -1 --format=%h 2>/dev/null || true)"
+  if [[ -n "$hash" ]]; then
+    subject="$(git -C "$wt" log -1 --format=%s)"
+    when="$(git -C "$wt" log -1 --format=%cr)"
+    last="{\"hash\":$(json_str "$hash"),\"subject\":$(json_str "$subject"),\"when\":$(json_str "$when")}"
+  fi
+
+  local mysql_db="" redis_db="" redis_prefix="" herd_url="" serve_port="" app_url=""
+  if [[ -f "$env_file" ]]; then
+    mysql_db="$(parse_env_value DB_DATABASE "$env_file")"
+    redis_db="$(parse_env_value REDIS_DB "$env_file")"
+    redis_prefix="$(parse_env_value REDIS_PREFIX "$env_file")"
+    herd_url="$(parse_env_value SPROUT_HERD_URL "$env_file")"
+    serve_port="$(parse_env_value SERVER_PORT "$env_file")"
+    app_url="$(parse_env_value APP_URL "$env_file")"
+  fi
+
+  # Worktrees from before SERVER_PORT: fall back to a local APP_URL's port
+  local local_url_re='^https?://(127\.0\.0\.1|localhost):([0-9]+)'
+  if [[ ! "$serve_port" =~ ^[0-9]+$ && "$app_url" =~ $local_url_re ]]; then
+    serve_port="${BASH_REMATCH[2]}"
+  fi
+
+  local serve_url="" serve_running=false
+  if [[ "$serve_port" =~ ^[0-9]+$ ]]; then
+    serve_url="http://127.0.0.1:$serve_port"
+    if port_listening "$serve_port"; then
+      serve_running=true
+    fi
+  fi
+
+  printf '{"branch":%s,"folder":%s,"path":%s,"base":%s,"changes":%s,"ahead":%s,"behind":%s,"lastCommit":%s,"mysqlDb":%s,"redisDb":%s,"redisPrefix":%s,"herdUrl":%s,"serveUrl":%s,"serveRunning":%s}' \
+    "$(json_str "$branch")" \
+    "$(json_str "$(basename "$wt")")" \
+    "$(json_str "$wt")" \
+    "$(json_str "$base")" \
+    "${changes:-0}" \
+    "$(json_int_or_null "$ahead")" \
+    "$(json_int_or_null "$behind")" \
+    "$last" \
+    "$(json_str_or_null "$mysql_db")" \
+    "$(json_int_or_null "$redis_db")" \
+    "$(json_str_or_null "$redis_prefix")" \
+    "$(json_str_or_null "$herd_url")" \
+    "$(json_str_or_null "$serve_url")" \
+    "$serve_running"
+}
+
+# project_json: print one project (with branches and worktrees) as JSON
+#   $1: project name  $2: project path
+project_json() {
+  local name="$1"
+  local path="$2"
+
+  local branches="" b
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    branches+="${branches:+,}$(json_str "$b")"
+  done < <(git -C "$path" for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null | LC_ALL=C sort)
+
+  local worktrees="" entry
+  for entry in "$SPROUT_PROJECTS_ROOT/${name}-worktrees"/*/; do
+    [[ -d "${entry}.git" || -f "${entry}.git" ]] || continue
+    worktrees+="${worktrees:+,}$(worktree_json "$path" "$entry")"
+  done
+
+  printf '{"name":%s,"path":%s,"branches":[%s],"worktrees":[%s]}' \
+    "$(json_str "$name")" "$(json_str "$path")" "$branches" "$worktrees"
 }
 
 # ─── Commands ─────────────────────────────────────────────────────────────────
@@ -319,6 +696,9 @@ cmd_create() {
   git -C "$proj_path" worktree add -b "$branch" "$worktree_path" "$base_branch" \
     || die2 "git worktree add failed. Ensure git 2.17+ is installed."
 
+  # Remember the base so `status` can report ahead/behind against it
+  git -C "$proj_path" config "branch.${branch}.sproutBase" "$base_branch"
+
   echo "Created worktree for branch '$folder_name'"
   echo "  Project : $proj_name"
   echo "  Branch  : $branch"
@@ -383,10 +763,14 @@ cmd_delete() {
     die "Worktree '$branch' has uncommitted changes. Use --force to delete anyway."
   fi
 
-  # Drop the worktree database before the folder is removed
+  # Drop the worktree database and Redis keys before the folder is removed
   if [[ "$keep_db" == false ]]; then
-    drop_worktree_db "$worktree_path/.env"
+    drop_worktree_db "$worktree_path/.env" "$proj_path/.env"
+    clear_worktree_redis "$worktree_path/.env"
   fi
+
+  # The Herd link would point at a folder that's about to disappear
+  unlink_worktree_herd "$worktree_path/.env"
 
   if [[ "$force" == true ]]; then
     git -C "$proj_path" worktree remove --force "$worktree_path" \
@@ -401,6 +785,77 @@ cmd_delete() {
   echo "Deleted worktree '$folder_name'"
   echo "  Project : $proj_name"
   echo "  Path    : $worktree_path"
+}
+
+cmd_clear() {
+  local project_arg=""
+  local force=false
+  local keep_db=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --project)
+        [[ -n "${2:-}" ]] || die "Missing value for --project."
+        project_arg="$2"
+        shift 2
+        ;;
+      --force)
+        force=true
+        shift
+        ;;
+      --keep-db)
+        keep_db=true
+        shift
+        ;;
+      -*)
+        die "Unknown option: $1. Run '$SCRIPT_NAME help clear' for usage."
+        ;;
+      *)
+        die "Unexpected argument: $1. Run '$SCRIPT_NAME help clear' for usage."
+        ;;
+    esac
+  done
+
+  resolve_project "$project_arg"
+  local proj_name="$REPLY_PROJECT_NAME"
+
+  local flags=""
+  [[ "$force" == true ]] && flags+=" --force"
+  [[ "$keep_db" == true ]] && flags+=" --keep-db"
+
+  local cleared=0 skipped=0 failed=0 found=false entry folder dirty
+  for entry in "$SPROUT_PROJECTS_ROOT/${proj_name}-worktrees"/*/; do
+    [[ -d "${entry}.git" || -f "${entry}.git" ]] || continue
+    found=true
+    folder="$(basename "$entry")"
+
+    if [[ "$force" == false ]]; then
+      dirty="$(git -C "$entry" status --porcelain 2>/dev/null || true)"
+      if [[ -n "$dirty" ]]; then
+        echo "Skipped '$folder' (uncommitted changes — use --force to delete it)"
+        skipped=$((skipped + 1))
+        continue
+      fi
+    fi
+
+    # Subshell: a failing delete exits only its own shell, so the rest still run
+    # shellcheck disable=SC2086
+    if ( cmd_delete "$folder" --project "$proj_name" $flags ); then
+      cleared=$((cleared + 1))
+    else
+      echo "Failed to delete '$folder'"
+      failed=$((failed + 1))
+    fi
+  done
+
+  if [[ "$found" == false ]]; then
+    echo "No worktrees to clear in project '$proj_name'."
+    return 0
+  fi
+
+  echo ""
+  echo "cleared $cleared · skipped $skipped · failed $failed"
+  [[ "$failed" -eq 0 ]] || die "Failed to delete $failed worktree(s) in '$proj_name'."
 }
 
 cmd_list() {
@@ -460,6 +915,48 @@ cmd_list() {
   printf '%s\n' "${lines[@]}"
 }
 
+cmd_status() {
+  local json=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)
+        json=true
+        shift
+        ;;
+      *)
+        die "Unknown option: $1. Run '$SCRIPT_NAME help status' for usage."
+        ;;
+    esac
+  done
+
+  [[ "$json" == true ]] \
+    || die "status currently requires --json. Run '$SCRIPT_NAME help status' for usage."
+  [[ -d "$SPROUT_PROJECTS_ROOT" ]] \
+    || die "Projects root '$SPROUT_PROJECTS_ROOT' does not exist."
+
+  local with="" without="" dir name project
+  for dir in "$SPROUT_PROJECTS_ROOT"/*/; do
+    dir="${dir%/}"
+    name="$(basename "$dir")"
+    [[ "$name" == *-worktrees ]] && continue
+    [[ -d "$dir/.git" || -f "$dir/.git" ]] || continue
+
+    project="$(project_json "$name" "$dir")"
+    if [[ "$project" == *'"worktrees":[]}' ]]; then
+      without+="${without:+,}$project"
+    else
+      with+="${with:+,}$project"
+    fi
+  done
+
+  local all="$with"
+  if [[ -n "$without" ]]; then
+    all+="${all:+,}$without"
+  fi
+  printf '{"projects":[%s]}\n' "$all"
+}
+
 cmd_help() {
   local topic="${1:-}"
 
@@ -483,8 +980,19 @@ OPTIONS:
 SETUP (auto-detected, runs after worktree creation):
   .env                 Copied from main project's .env (real credentials)
   DB_DATABASE          New database cloned from main and .env updated
+  Redis                Own REDIS_PREFIX / CACHE_PREFIX / HORIZON_PREFIX and a
+                       free REDIS_DB (= REDIS_CACHE_DB) index, so queues and
+                       cache don't mix with the main project or other worktrees
+  Serving              Own SERVER_PORT (8001+) for php artisan serve; if the
+                       main project is linked in Herd, its own Herd site too
+                       (<project>-<folder>.test, secure/PHP matching main).
+                       APP_URL points at the Herd site, else the serve port.
   composer.json        vendor/ seeded from main project + composer dump-autoload
   package.json         node_modules/ seeded from main project + npm/yarn/pnpm install
+
+BASE TRACKING:
+  The base branch is stored in git config (branch.<name>.sproutBase) so
+  'status --json' can report commits ahead/behind it.
 
 EXAMPLES:
   $SCRIPT_NAME create feature/my-thing
@@ -501,11 +1009,34 @@ EXIT CODES:
   2  git command failed
 EOF
       ;;
+    clear)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME clear [options]
+
+  Deletes every worktree of a project, one by one, as 'delete' would.
+  Worktrees with uncommitted changes are skipped unless --force is given.
+  A failing delete does not stop the others. Branches are kept.
+
+OPTIONS:
+  --project <name>     Target project. Auto-detected if inside a project.
+  --force              Also delete worktrees with uncommitted changes.
+  --keep-db            Skip dropping databases and clearing Redis keys.
+
+EXAMPLES:
+  $SCRIPT_NAME clear --project scooda
+  $SCRIPT_NAME clear --project scooda --force --keep-db
+
+EXIT CODES:
+  0  Every worktree was deleted or skipped
+  1  At least one delete failed, or project not found
+EOF
+      ;;
     delete)
       cat <<EOF
 COMMAND: $SCRIPT_NAME delete <branch-name> [options]
 
-  Removes a worktree folder, its git registration, and its cloned database.
+  Removes a worktree folder, its git registration, its cloned database,
+  and its Redis keys.
 
 ARGUMENTS:
   <branch-name>        Required. Branch name whose worktree to delete.
@@ -513,7 +1044,8 @@ ARGUMENTS:
 OPTIONS:
   --project <name>     Target project. Auto-detected if inside a project.
   --force              Required when the worktree has uncommitted changes.
-  --keep-db            Skip dropping the worktree's cloned database.
+  --keep-db            Skip dropping the worktree's cloned database and
+                       clearing its Redis keys.
 
 EXAMPLES:
   $SCRIPT_NAME delete feature/my-thing
@@ -550,6 +1082,22 @@ EXIT CODES:
   1  Project not found
 EOF
       ;;
+    status)
+      cat <<EOF
+COMMAND: $SCRIPT_NAME status --json
+
+  Prints every project under \$SPROUT_PROJECTS_ROOT and its worktrees as one
+  line of JSON. Used by the Sprout menu bar app.
+
+  Per worktree: branch, folder, path, base, changes, ahead, behind,
+  lastCommit {hash, subject, when}, mysqlDb, redisDb, redisPrefix.
+  Unknown values are null. Projects with worktrees are listed first.
+
+EXIT CODES:
+  0  Success
+  1  --json missing, or projects root not found
+EOF
+      ;;
     ""|help)
       cat <<EOF
 $SCRIPT_NAME — git worktree manager
@@ -559,8 +1107,10 @@ USAGE:
 
 COMMANDS:
   create <branch>   Create a new branch and worktree
-  delete <branch>   Remove a worktree, its git registration, and its database
+  delete <branch>   Remove a worktree, its git registration, database, and Redis keys
+  clear             Remove every worktree of a project
   list              List all worktrees for a project
+  status --json     Print all projects and worktrees as JSON
   help [command]    Show help for a specific command
 
 GLOBAL OPTIONS:
@@ -591,10 +1141,12 @@ For command-specific help:
   $SCRIPT_NAME help create
   $SCRIPT_NAME help delete
   $SCRIPT_NAME help list
+  $SCRIPT_NAME help status
+  $SCRIPT_NAME help clear
 EOF
       ;;
     *)
-      die "Unknown help topic: '$topic'. Available: create, delete, list"
+      die "Unknown help topic: '$topic'. Available: create, delete, clear, list, status"
       ;;
   esac
 }
@@ -608,7 +1160,9 @@ main() {
   case "$cmd" in
     create)    cmd_create "$@" ;;
     delete)    cmd_delete "$@" ;;
+    clear)     cmd_clear  "$@" ;;
     list)      cmd_list   "$@" ;;
+    status)    cmd_status "$@" ;;
     help)      cmd_help   "$@" ;;
     --help|-h) cmd_help ;;
     *)
