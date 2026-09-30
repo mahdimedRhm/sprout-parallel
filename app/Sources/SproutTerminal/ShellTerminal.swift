@@ -81,14 +81,24 @@ public final class ShellTerminal: NSObject, TerminalHandle {
         return env.map { "\($0.key)=\($0.value)" }.sorted()
     }
 
+    /// Set once the shell has come up (see `foregroundProcessName`).
+    private var ready = false
+
     /// Name of the terminal's foreground process group leader (the shell when idle).
+    /// Nil until the shell has started: straight after the fork the foreground
+    /// process still carries our own name, and zsh's startup would read as busy.
     public var foregroundProcessName: String? {
         guard !ended, terminalView.process.running else { return nil }
         let group = tcgetpgrp(terminalView.process.childfd)
         guard group > 0 else { return nil }
         var buffer = [CChar](repeating: 0, count: 256)
         guard proc_name(group, &buffer, UInt32(buffer.count)) > 0 else { return nil }
-        return String(cString: buffer)
+        let name = String(cString: buffer)
+        if !ready {
+            if name == ProcessInfo.processInfo.processName && name != shellName { return nil }
+            ready = true
+        }
+        return name
     }
 
     public var isBusy: Bool {

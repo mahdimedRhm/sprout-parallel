@@ -46,6 +46,7 @@ public final class TerminalSessions: ObservableObject {
 
     /// How long restart/stop wait for ⌃C to stop a service before terminating its tab.
     public var serviceTimeout: TimeInterval = 5
+    private var servicesInFlight: Set<String> = []
     @Published public private(set) var servicesByPath: [String: [Service: UUID]] = [:]
 
     public init(factory: @escaping Factory) {
@@ -145,14 +146,20 @@ public final class TerminalSessions: ObservableObject {
     }
 
     /// ⌃C, wait for the command to stop, run it again. A tab that ignores ⌃C
-    /// is terminated and replaced.
+    /// is terminated and replaced. Ignored while a restart or stop of the same
+    /// service is already under way, and abandoned if the tab goes away meanwhile.
     public func restartService(_ service: Service, command: String, in path: String) async {
         guard let tab = serviceTab(service, in: path) else {
             startService(service, command: command, in: path)
             return
         }
+        let key = inFlightKey(service, path)
+        guard servicesInFlight.insert(key).inserted else { return }
+        defer { servicesInFlight.remove(key) }
         tab.send("\u{3}")
-        if await waitUntilIdle(tab) {
+        let stopped = await waitUntilIdle(tab)
+        guard serviceTab(service, in: path) === tab else { return }
+        if stopped {
             tab.send(command + "\n")
             activeByPath[path] = tab.id
         } else {
@@ -161,12 +168,21 @@ public final class TerminalSessions: ObservableObject {
         }
     }
 
-    /// ⌃C, wait for the command to stop, close the tab.
+    /// ⌃C, wait for the command to stop, close the tab. Ignored while a restart
+    /// or stop of the same service is under way.
     public func stopService(_ service: Service, in path: String) async {
         guard let tab = serviceTab(service, in: path) else { return }
+        let key = inFlightKey(service, path)
+        guard servicesInFlight.insert(key).inserted else { return }
+        defer { servicesInFlight.remove(key) }
         tab.send("\u{3}")
         _ = await waitUntilIdle(tab)
+        guard serviceTab(service, in: path) === tab else { return }
         closeTab(tab.id, in: path)
+    }
+
+    private func inFlightKey(_ service: Service, _ path: String) -> String {
+        "\(service.rawValue)\u{0}\(path)"
     }
 
     private func waitUntilIdle(_ tab: any TerminalHandle) async -> Bool {

@@ -99,4 +99,17 @@ func shellChecks() async {
     await services.stopService(.serve, in: dir.path)
     check(services.serviceTab(.serve, in: dir.path) == nil, "live: stop closes the tab")
     services.terminateAll()
+
+    // Stop right after start: the startup window must not count as running
+    let quick = TerminalSessions { ShellTerminal(directory: $0) }
+    quick.serviceTimeout = 5
+    quick.startService(.serve, command: "sleep 30", in: dir.path)
+    let began = Date()
+    await quick.stopService(.serve, in: dir.path)
+    check(Date().timeIntervalSince(began) < 4, "live: stop right after start returns quickly")
+    check(quick.serviceTab(.serve, in: dir.path) == nil, "live: quick stop closes the tab")
+    quick.startService(.serve, command: "sleep 30", in: dir.path)
+    check(await waitUntil(8) { quick.isServiceRunning(.serve, in: dir.path) }, "live: running once the command runs")
+    check(quick.serviceTab(.serve, in: dir.path)?.title == "sleep", "live: title is the command once running")
+    quick.terminateAll()
 }
