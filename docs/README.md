@@ -268,6 +268,20 @@ If a worktree's own MySQL database can't be created (e.g. access denied), its
 database — the create output ends with a warning, and Sprout shows
 `mysql ✗ not created` for it.
 
+### Serve, queue and database
+
+`⌘⇧P` (from anywhere, including the terminal) opens the command palette for the
+selected worktree; `s`, `q` and `d` open it filtered to serve, queue or database.
+
+- **serve / queue: start · restart · stop** — run `php artisan serve` and the
+  queue (`php artisan horizon` when the project uses Horizon, else
+  `queue:work`) in their own `serve` / `queue` terminal tabs, so you see the
+  output. Restart sends ⌃C and reruns; stop sends ⌃C and closes the tab.
+- **db: create from main · refresh from main · drop** — run
+  `sprout-parallel db create|refresh|drop`, which only ever touches the
+  worktree's own database (`<main>_<folder>`). Refresh and drop ask first.
+- **db: migrate:fresh --seed** — rebuilds the schema in a terminal tab.
+
 ### Terminals
 
 Every worktree has its own terminal tabs below its details, running your login
@@ -304,6 +318,8 @@ Press `?` in Sprout for this list.
 | `⇧X` | clear all worktrees of the selected project |
 | `r` / `⌘R` | refresh |
 | `l` | log of the running / last create, delete or clear |
+| `⌘⇧P` | command palette (every action, searchable) |
+| `s` / `q` / `d` | serve / queue / database actions |
 | `?` | keyboard cheat sheet |
 | ``⌃` `` | focus the terminal / back to the list |
 | `⌘T` / `⌘⇧W` (or `×`) | new terminal tab / close tab |
@@ -323,5 +339,6 @@ swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
 bash ../tests/status_test.sh # status --json tests
 bash ../tests/clear_test.sh  # clear tests
 bash ../tests/serve_test.sh  # port + Herd link tests
+bash ../tests/db_test.sh     # db create/refresh/drop
 bash ../tests/db_setup_test.sh # failed database clone never points at the main DB
 ```

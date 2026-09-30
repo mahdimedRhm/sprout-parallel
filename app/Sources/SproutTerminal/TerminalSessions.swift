@@ -1,5 +1,10 @@
 import Foundation
 
+/// Long-running commands that get their own, named terminal tab per worktree.
+public enum Service: String, CaseIterable {
+    case serve, queue
+}
+
 /// Terminal tabs per worktree path, and which one is active.
 @MainActor
 public final class TerminalSessions: ObservableObject {
@@ -38,6 +43,11 @@ public final class TerminalSessions: ObservableObject {
     private let factory: Factory
     /// Worktrees whose terminal has been opened at least once.
     private var startedPaths: Set<String> = []
+
+    /// How long restart/stop wait for ⌃C to stop a service before terminating its tab.
+    public var serviceTimeout: TimeInterval = 5
+    private var servicesInFlight: Set<String> = []
+    @Published public private(set) var servicesByPath: [String: [Service: UUID]] = [:]
 
     public init(factory: @escaping Factory) {
         self.factory = factory
@@ -106,6 +116,83 @@ public final class TerminalSessions: ObservableObject {
         activeByPath[path] = tabs[index].id
     }
 
+    public func serviceTab(_ service: Service, in path: String) -> (any TerminalHandle)? {
+        guard let id = servicesByPath[path]?[service] else { return nil }
+        return tabs(for: path).first { $0.id == id }
+    }
+
+    public func service(of id: UUID, in path: String) -> Service? {
+        servicesByPath[path]?.first { $0.value == id }?.key
+    }
+
+    public func isServiceRunning(_ service: Service, in path: String) -> Bool {
+        serviceTab(service, in: path)?.isBusy ?? false
+    }
+
+    /// Runs `command` in the service's tab (reusing it when idle) and shows that
+    /// tab. False when it's already running or no shell could start.
+    @discardableResult
+    public func startService(_ service: Service, command: String, in path: String) -> Bool {
+        if let tab = serviceTab(service, in: path) {
+            guard !tab.isBusy else { return false }
+            tab.send(command + "\n")
+            activeByPath[path] = tab.id
+            return true
+        }
+        guard let tab = openTab(in: path) else { return false }
+        servicesByPath[path, default: [:]][service] = tab.id
+        tab.send(command + "\n")
+        return true
+    }
+
+    /// ⌃C, wait for the command to stop, run it again. A tab that ignores ⌃C
+    /// is terminated and replaced. Ignored while a restart or stop of the same
+    /// service is already under way, and abandoned if the tab goes away meanwhile.
+    public func restartService(_ service: Service, command: String, in path: String) async {
+        guard let tab = serviceTab(service, in: path) else {
+            startService(service, command: command, in: path)
+            return
+        }
+        let key = inFlightKey(service, path)
+        guard servicesInFlight.insert(key).inserted else { return }
+        defer { servicesInFlight.remove(key) }
+        tab.send("\u{3}")
+        let stopped = await waitUntilIdle(tab)
+        guard serviceTab(service, in: path) === tab else { return }
+        if stopped {
+            tab.send(command + "\n")
+            activeByPath[path] = tab.id
+        } else {
+            closeTab(tab.id, in: path)
+            startService(service, command: command, in: path)
+        }
+    }
+
+    /// ⌃C, wait for the command to stop, close the tab. Ignored while a restart
+    /// or stop of the same service is under way.
+    public func stopService(_ service: Service, in path: String) async {
+        guard let tab = serviceTab(service, in: path) else { return }
+        let key = inFlightKey(service, path)
+        guard servicesInFlight.insert(key).inserted else { return }
+        defer { servicesInFlight.remove(key) }
+        tab.send("\u{3}")
+        _ = await waitUntilIdle(tab)
+        guard serviceTab(service, in: path) === tab else { return }
+        closeTab(tab.id, in: path)
+    }
+
+    private func inFlightKey(_ service: Service, _ path: String) -> String {
+        "\(service.rawValue)\u{0}\(path)"
+    }
+
+    private func waitUntilIdle(_ tab: any TerminalHandle) async -> Bool {
+        let deadline = Date().addingTimeInterval(serviceTimeout)
+        while tab.isBusy && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return !tab.isBusy
+    }
+
     public func closeTab(_ id: UUID, in path: String) {
         tabs(for: path).first { $0.id == id }?.terminate()
         remove(id, in: path)
@@ -117,6 +204,7 @@ public final class TerminalSessions: ObservableObject {
             tabs(for: path).forEach { $0.terminate() }
             tabsByPath[path] = nil
             activeByPath[path] = nil
+            servicesByPath[path] = nil
         }
         startedPaths.formIntersection(paths)
         failedPaths.formIntersection(paths)
@@ -133,6 +221,7 @@ public final class TerminalSessions: ObservableObject {
         tabsByPath.values.flatMap { $0 }.forEach { $0.terminate() }
         tabsByPath = [:]
         activeByPath = [:]
+        servicesByPath = [:]
         reconcileFocus()
     }
 
@@ -141,6 +230,7 @@ public final class TerminalSessions: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs.remove(at: index)
         tabsByPath[path] = tabs.isEmpty ? nil : tabs
+        if let service = service(of: id, in: path) { servicesByPath[path]?[service] = nil }
         if activeByPath[path] == id {
             activeByPath[path] = tabs.isEmpty ? nil : tabs[min(index, tabs.count - 1)].id
         }

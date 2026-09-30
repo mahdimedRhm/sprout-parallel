@@ -41,6 +41,21 @@ public struct Worktree: Codable, Equatable, Hashable, Identifiable {
     public var isDirty: Bool { changes > 0 }
     /// Something is listening on the worktree's `php artisan serve` port.
     public var isServing: Bool { serveRunning ?? false }
+
+    /// Mirrors the script's `db_safe_name`: every character outside [A-Za-z0-9] becomes "_".
+    public static func dbSafeName(_ name: String) -> String {
+        String(name.unicodeScalars.map { scalar -> Character in
+            let isAlnum = (scalar.value >= 48 && scalar.value <= 57) || (scalar.value >= 65 && scalar.value <= 90)
+                || (scalar.value >= 97 && scalar.value <= 122)
+            return isAlnum ? Character(scalar) : "_"
+        })
+    }
+
+    /// `DB_DATABASE` is this worktree's own database (`<main>_<folder>`), not the main one.
+    public var hasOwnDatabase: Bool {
+        guard let db = mysqlDb, !db.isEmpty else { return false }
+        return db.hasSuffix("_" + Worktree.dbSafeName(folder))
+    }
 }
 
 public struct LastCommit: Codable, Equatable, Hashable {

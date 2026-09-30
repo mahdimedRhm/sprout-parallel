@@ -86,4 +86,30 @@ func shellChecks() async {
     check(!second.isBusy, "a terminated shell is not busy")
     // A zombie still answers kill(pid, 0) == 0; only a reaped process gives ESRCH.
     check(await waitUntil(5) { kill(pid, 0) == -1 && errno == ESRCH }, "terminate() reaps the shell (no zombie)")
+
+    // A real service: start, restart, stop
+    let services = TerminalSessions { ShellTerminal(directory: $0) }
+    services.serviceTimeout = 5
+    check(services.startService(.serve, command: "sleep 30", in: dir.path), "live: service starts")
+    check(await waitUntil(8) { services.isServiceRunning(.serve, in: dir.path) }, "live: service is running")
+    // Right after fork the tab is "busy" while the shell is still starting; wait for the command itself.
+    check(await waitUntil(8) { services.serviceTab(.serve, in: dir.path)?.title == "sleep" }, "live: the shell is running the command")
+    await services.restartService(.serve, command: "sleep 30", in: dir.path)
+    check(await waitUntil(8) { services.isServiceRunning(.serve, in: dir.path) }, "live: running after restart")
+    await services.stopService(.serve, in: dir.path)
+    check(services.serviceTab(.serve, in: dir.path) == nil, "live: stop closes the tab")
+    services.terminateAll()
+
+    // Stop right after start: the startup window must not count as running
+    let quick = TerminalSessions { ShellTerminal(directory: $0) }
+    quick.serviceTimeout = 5
+    quick.startService(.serve, command: "sleep 30", in: dir.path)
+    let began = Date()
+    await quick.stopService(.serve, in: dir.path)
+    check(Date().timeIntervalSince(began) < 4, "live: stop right after start returns quickly")
+    check(quick.serviceTab(.serve, in: dir.path) == nil, "live: quick stop closes the tab")
+    quick.startService(.serve, command: "sleep 30", in: dir.path)
+    check(await waitUntil(8) { quick.isServiceRunning(.serve, in: dir.path) }, "live: running once the command runs")
+    check(quick.serviceTab(.serve, in: dir.path)?.title == "sleep", "live: title is the command once running")
+    quick.terminateAll()
 }

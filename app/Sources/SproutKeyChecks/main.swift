@@ -336,6 +336,65 @@ func keyChecks() async {
     checkEqual(store.mode, .list, "esc leaves the log; the create keeps running")
     check(await waitUntil(5) { !store.isBusy }, "the create finishes in the background")
     checkEqual(store.operation, .succeeded, "and succeeds")
+    // ── Command palette ──────────────────────────────────────────────────
+    await focusList()
+    store.selectProject("demo")
+    await shortcut("P", [.command, .shift], window)
+    check(await waitUntil(2) { store.palette != nil }, "⌘⇧P opens the palette from the list")
+    opened = []
+    await type("open war", into: window)
+    await pause(0.2)
+    await press(.returnKey, window)
+    checkEqual(opened, ["warp:\(pathX)"], "typing filters and ⏎ runs the action")
+    check(store.palette == nil, "running an action closes the palette")
+    checkEqual(store.mode, .list, "typing in the palette triggers no list action")
+
+    await type("s", into: window)
+    checkEqual(store.palette, "serve ", "s opens the palette filtered to serve")
+    await press(.escape, window)
+    check(store.palette == nil, "esc closes the palette")
+    check(window.isVisible, "esc closing the palette doesn't hide the window")
+    await type("d", into: window)
+    checkEqual(store.palette, "db ", "d opens the palette filtered to db")
+    await press(.escape, window)
+    await type("q", into: window)
+    checkEqual(store.palette, "queue ", "q opens the palette filtered to queue")
+    await press(.escape, window)
+
+    // Window shortcuts do nothing while the palette is open.
+    await shortcut("P", [.command, .shift], window)
+    check(await waitUntil(2) { store.palette != nil }, "⌘⇧P opens the palette before the shortcut check")
+    await shortcut("`", [.control], window)
+    await pause(0.3)
+    await type("abc", into: window)
+    check(store.palette != nil, "⌃` doesn't close the palette")
+    check(store.palette?.contains("abc") == true, "typing after ⌃` still reaches the palette field")
+    check(!terminals.terminalHasFocus, "⌃` doesn't move focus to a terminal behind the palette")
+    await press(.escape, window)
+    check(store.palette == nil, "esc closes the palette")
+
+    await shortcut("`", [.control], window)
+    check(await waitUntil(3) { terminals.terminalHasFocus }, "back in the terminal")
+    await shortcut("P", [.command, .shift], window)
+    check(await waitUntil(2) { store.palette != nil }, "⌘⇧P opens the palette from the terminal")
+    opened = []
+    await type("open fin", into: window)
+    await pause(0.2)
+    await press(.returnKey, window)
+    checkEqual(opened, ["finder:\(pathX)"], "the palette runs actions opened from the terminal")
+    check(await waitUntil(2) { terminals.terminalHasFocus }, "closing the palette returns focus to the terminal")
+
+    // An action that opens a form keeps the keyboard for the form, not the terminal.
+    await shortcut("P", [.command, .shift], window)
+    check(await waitUntil(2) { store.palette != nil }, "⌘⇧P opens the palette again from the terminal")
+    await type("worktree new", into: window)
+    await pause(0.2)
+    await press(.returnKey, window)
+    checkEqual(store.mode, .create, "worktree: new opens the create form")
+    await pause(1)
+    check(!terminals.terminalHasFocus, "the form keeps the keyboard; the terminal doesn't take it back")
+    await press(.escape, window)
+    checkEqual(store.mode, .list, "esc leaves the form")
     Openers.intercept = nil
 }
 

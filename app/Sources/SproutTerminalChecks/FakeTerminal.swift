@@ -14,6 +14,20 @@ final class FakeTerminal: TerminalHandle {
 
     func terminate() { terminated = true }
 
+    private(set) var sent: [String] = []
+    /// When true, ⌃C doesn't stop the running command.
+    var ignoresInterrupt = false
+
+    /// Records input; a line starts a command, ⌃C stops it (unless ignored).
+    func send(_ text: String) {
+        sent.append(text)
+        if text == "\u{3}" {
+            if !ignoresInterrupt { isBusy = false }
+        } else if text.hasSuffix("\n") {
+            isBusy = true
+        }
+    }
+
     /// Simulates the terminal view gaining or losing first responder.
     func setFocused(_ focused: Bool) { onFocusChange?(focused) }
 

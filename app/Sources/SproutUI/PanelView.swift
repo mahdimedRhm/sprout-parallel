@@ -9,6 +9,7 @@ public struct PanelView: View {
     @AppStorage("sprout.terminalCollapsed") private var terminalCollapsed = false
     @State private var windowBox = WindowBox()
     @State private var keyMonitor = KeyMonitor()
+    @State private var paletteFromTerminal = false
 
     public static let minimumSize = CGSize(width: 620, height: 400)
 
@@ -48,6 +49,7 @@ public struct PanelView: View {
         .environment(\.colorScheme, .dark)
         .background { terminalShortcuts }
         .overlay { if store.showingKeys { KeyCheatSheet() } }
+        .overlay { if store.palette != nil { CommandPalette(actions: paletteActions, onClose: closePalette, onRun: runPaletteAction) } }
         .onAppear { keyMonitor.install(handleListKey) }
         .onDisappear { keyMonitor.remove() }
         .task { await store.refresh() }
@@ -83,6 +85,60 @@ public struct PanelView: View {
         }
     }
 
+    private var paletteActions: [PaletteAction] {
+        let all = paletteCatalog(store: store, terminals: terminals) { terminalCollapsed = false }
+        return PaletteMatcher.order(all, query: store.palette ?? "", title: { $0.title })
+    }
+
+    private func openPalette(_ query: String) {
+        guard store.palette == nil else { return }
+        paletteFromTerminal = terminals.terminalHasFocus
+        store.palette = query
+    }
+
+    /// Closes the palette and puts the keyboard back where it was.
+    private func closePalette() {
+        store.palette = nil
+        restorePaletteFocus()
+    }
+
+    private func restorePaletteFocus() {
+        if paletteFromTerminal, let path = terminalPath {
+            focusTerminal(in: path)
+        } else {
+            focusList()
+        }
+    }
+
+    /// Runs an action, then restores focus only if we're still on the list;
+    /// a form the action opened keeps the keyboard.
+    private func runPaletteAction(_ action: PaletteAction) {
+        store.palette = nil
+        action.run()
+        if store.mode == .list { restorePaletteFocus() }
+    }
+
+    /// ↑ ↓ ⏎ esc while the palette is open; other keys go to its search field.
+    private func handlePaletteKey(_ event: NSEvent) -> Bool {
+        let actions = paletteActions
+        switch event.keyCode {
+        case 53:  // esc
+            closePalette()
+        case 125:  // ↓
+            store.paletteSelection = min(store.paletteSelection + 1, max(actions.count - 1, 0))
+        case 126:  // ↑
+            store.paletteSelection = max(store.paletteSelection - 1, 0)
+        case 36, 76:  // ⏎
+            guard actions.indices.contains(store.paletteSelection) else { return true }
+            let action = actions[store.paletteSelection]
+            guard action.unavailable == nil else { return true }
+            runPaletteAction(action)
+        default:
+            return false
+        }
+        return true
+    }
+
     @ViewBuilder private var content: some View {
         switch store.mode {
         case .list:
@@ -114,7 +170,9 @@ public struct PanelView: View {
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
             }
             Button("") { Task { await store.refresh() } }.keyboardShortcut("r", modifiers: .command)
+            Button("", action: { openPalette("") }).keyboardShortcut("P", modifiers: [.command, .shift])
         }
+        .disabled(store.palette != nil)
         .opacity(0)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -175,6 +233,7 @@ public struct PanelView: View {
     /// re-took first responder from it.) Returns true when the key was used.
     private func handleListKey(_ event: NSEvent) -> Bool {
         guard let window = windowBox.window, event.window === window else { return false }
+        if store.palette != nil { return handlePaletteKey(event) }
         guard !terminals.terminalHasFocus else { return false }   // keys belong to the shell
 
         // Away from the list: the activity log, or a form whose operation is
@@ -246,6 +305,12 @@ public struct PanelView: View {
             store.showingKeys = true
         case "l":
             store.showActivity()
+        case "s":
+            openPalette("serve ")
+        case "q":
+            openPalette("queue ")
+        case "d":
+            openPalette("db ")
         default:
             return false
         }

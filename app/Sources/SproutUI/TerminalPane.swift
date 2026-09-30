@@ -39,7 +39,7 @@ struct TerminalPane: View {
                 if let path {
                     ForEach(terminals.tabs(for: path), id: \.id) { tab in
                         TerminalTabButton(
-                            title: tab.title, busy: tab.isBusy,
+                            title: terminals.service(of: tab.id, in: path)?.rawValue ?? tab.title, busy: tab.isBusy,
                             active: terminals.activeTab(for: path)?.id == tab.id,
                             action: {
                                 terminals.activate(tab.id, in: path)

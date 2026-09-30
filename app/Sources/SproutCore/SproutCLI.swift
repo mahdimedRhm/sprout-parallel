@@ -13,6 +13,10 @@ public enum CLIError: Error, Equatable {
     }
 }
 
+public enum DatabaseAction: String {
+    case create, refresh, drop
+}
+
 /// Builds and runs `sprout-parallel` commands.
 public struct SproutCLI {
     public let shell: Shell
@@ -38,6 +42,11 @@ public struct SproutCLI {
         if force { parts.append("--force") }
         if keepData { parts.append("--keep-db") }
         return parts.joined(separator: " ")
+    }
+
+    public static func dbCommand(action: DatabaseAction, project: String, folder: String) -> String {
+        ["sprout-parallel", "db", action.rawValue, shellQuote(folder), "--project", shellQuote(project)]
+            .joined(separator: " ")
     }
 
     public static func deleteCommand(project: String, folder: String, force: Bool, keepData: Bool) -> String {
