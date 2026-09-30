@@ -909,7 +909,7 @@ func paletteCatalog(store: WorktreeStore, terminals: TerminalSessions, showTermi
     func database(_ action: DatabaseAction, title: String, confirm: (String, String)?) -> PaletteAction {
         PaletteAction(title: title, unavailable: noWorktree ?? busy) {
             guard let worktree else { return }
-            if let (message, detail) = confirm, !confirmAction(message, detail) { return }
+            if let confirm, !confirmAction(confirm.0, confirm.1) { return }
             Task { await store.database(action, worktree: worktree) }
         }
     }
