@@ -94,7 +94,9 @@ public struct PanelView: View {
 
     private func toggleTerminalFocus() {
         guard let path = terminalPath else { return }
-        if let view = terminals.activeTab(for: path)?.view, view.window?.firstResponder === view {
+        if let view = terminals.activeTab(for: path)?.view,
+           let responder = view.window?.firstResponder as? NSView,
+           responder === view || responder.isDescendant(of: view) {
             view.window?.makeFirstResponder(nil)
             focused = true
             return
@@ -124,11 +126,13 @@ public struct PanelView: View {
         terminals.closeTab(tab.id, in: path)
     }
 
-    private func focusTerminal(in path: String) {
-        // The view is attached to the window on the next layout pass.
-        DispatchQueue.main.async {
+    private func focusTerminal(in path: String, attempt: Int = 0) {
+        // The view is attached to the window on a later layout pass (fresh tab, or
+        // expanding from collapsed), so retry for up to ~0.5s.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0 : 0.05)) {
             guard let view = terminals.activeTab(for: path)?.view else { return }
-            view.window?.makeFirstResponder(view)
+            if let window = view.window, window.makeFirstResponder(view) { return }
+            if attempt < 10 { focusTerminal(in: path, attempt: attempt + 1) }
         }
     }
 

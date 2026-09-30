@@ -68,10 +68,11 @@ func makeStore(_ respond: @escaping (String) -> ShellResult) async -> WorktreeSt
 }
 
 @MainActor
-func render(_ name: String, _ store: WorktreeStore, terminals: TerminalSessions? = nil) {
+func render(_ name: String, _ store: WorktreeStore, terminals: TerminalSessions? = nil,
+            size: CGSize = CGSize(width: 900, height: 640)) {
     let terminals = terminals ?? TerminalSessions { _ in SnapshotTerminal() }
     let renderer = ImageRenderer(
-        content: PanelView().environmentObject(store).environmentObject(terminals).frame(width: 900, height: 640))
+        content: PanelView().environmentObject(store).environmentObject(terminals).frame(width: size.width, height: size.height))
     renderer.scale = 2
     guard let image = renderer.nsImage,
           let tiff = image.tiffRepresentation,
@@ -122,6 +123,7 @@ let createOK: (String) -> ShellResult = { command in
 let creating = await makeStore(createOK)
 creating.beginCreate()
 render("create-empty", creating)
+render("min-size-create", creating, size: PanelView.minimumSize)
 await creating.create(branch: "feature/invoices", base: "main", runSetup: true)
 render("create-done", creating)
 

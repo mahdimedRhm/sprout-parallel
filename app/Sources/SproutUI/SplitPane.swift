@@ -7,6 +7,12 @@ struct SplitPane<Top: View, Bottom: View>: View {
     @AppStorage("sprout.terminalFraction") private var fraction = 0.45
     @AppStorage("sprout.terminalCollapsed") private var collapsed = false
     @State private var dragStartFraction: Double?
+    @State private var hovering = false
+    @State private var dragging = false
+    @State private var cursorPushed = false
+
+    /// The top always keeps at least this much height.
+    static var minimumTopHeight: CGFloat { 180 }
 
     /// Height of the bottom when collapsed: just its tab bar.
     static var collapsedHeight: CGFloat { 30 }
@@ -22,9 +28,12 @@ struct SplitPane<Top: View, Bottom: View>: View {
     var body: some View {
         GeometryReader { geometry in
             let height = geometry.size.height
-            let bottomHeight = collapsed
+            let dividerHeight: CGFloat = collapsed ? 1 : 5
+            let wanted = collapsed
                 ? Self.collapsedHeight
                 : max(Self.collapsedHeight, (height * fraction).rounded())
+            let room = height - Self.minimumTopHeight - dividerHeight
+            let bottomHeight = max(Self.collapsedHeight, min(wanted, room))
             VStack(spacing: 0) {
                 top.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 divider(totalHeight: height)
@@ -39,16 +48,43 @@ struct SplitPane<Top: View, Bottom: View>: View {
             .frame(height: collapsed ? 1 : 5)
             .contentShape(Rectangle())
             .onHover { inside in
-                if inside && !collapsed { NSCursor.resizeUpDown.set() } else { NSCursor.arrow.set() }
+                hovering = inside
+                updateCursor()
+            }
+            .onChange(of: collapsed) { _, _ in updateCursor() }
+            .onDisappear {
+                hovering = false
+                dragging = false
+                updateCursor()
             }
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         guard !collapsed, totalHeight > 0 else { return }
+                        if !dragging {
+                            dragging = true
+                            updateCursor()
+                        }
                         let start = dragStartFraction ?? fraction
                         dragStartFraction = start
                         fraction = min(0.85, max(0.15, start - value.translation.height / totalHeight))
                     }
-                    .onEnded { _ in dragStartFraction = nil })
+                    .onEnded { _ in
+                        dragStartFraction = nil
+                        dragging = false
+                        updateCursor()
+                    })
+    }
+
+    /// Push the resize cursor once when hover or a drag starts; pop once when both end.
+    private func updateCursor() {
+        let wanted = (hovering || dragging) && !collapsed
+        if wanted && !cursorPushed {
+            NSCursor.resizeUpDown.push()
+            cursorPushed = true
+        } else if !wanted && cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
+        }
     }
 }
