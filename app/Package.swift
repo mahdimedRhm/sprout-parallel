@@ -16,5 +16,6 @@ let package = Package(
         .executableTarget(name: "SproutCoreChecks", dependencies: ["SproutCore", "CheckKit"]),
         .executableTarget(name: "SproutTerminalChecks", dependencies: ["SproutTerminal", "CheckKit"]),
         .executableTarget(name: "SproutSnapshots", dependencies: ["SproutCore", "SproutUI", "SproutTerminal"]),
+        .executableTarget(name: "SproutKeyChecks", dependencies: ["SproutCore", "SproutUI", "SproutTerminal", "CheckKit"]),
     ]
 )

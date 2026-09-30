@@ -9,6 +9,50 @@ public final class WorktreeStore: ObservableObject {
         case create
         case delete(Worktree)
         case clear(Project)
+        /// The log of the running (or last) operation, reopened from the header.
+        case activity
+    }
+
+    /// The running (or last) create/delete/clear, shown in the header so it can
+    /// keep going while the user moves around.
+    public struct Activity: Equatable {
+        public enum Kind: Equatable {
+            case create(branch: String)
+            case delete(branch: String)
+            case clear
+        }
+
+        public let kind: Kind
+        public let project: String
+
+        public init(kind: Kind, project: String) {
+            self.kind = kind
+            self.project = project
+        }
+
+        public var runningTitle: String {
+            switch kind {
+            case .create(let branch): "creating \(branch) in \(project)"
+            case .delete(let branch): "deleting \(branch) in \(project)"
+            case .clear: "clearing \(project)"
+            }
+        }
+
+        public var doneTitle: String {
+            switch kind {
+            case .create(let branch): "created \(branch)"
+            case .delete(let branch): "deleted \(branch)"
+            case .clear: "cleared \(project)"
+            }
+        }
+
+        public var failedTitle: String {
+            switch kind {
+            case .create: "create failed"
+            case .delete: "delete failed"
+            case .clear: "clear failed"
+            }
+        }
     }
 
     public enum Operation: Equatable {
@@ -21,8 +65,11 @@ public final class WorktreeStore: ObservableObject {
     @Published public private(set) var projects: [Project] = []
     @Published public var selectedProjectName: String?
     @Published public var selectedWorktreePath: String?
+    /// The keyboard cheat sheet (`?`) is showing.
+    @Published public var showingKeys = false
     @Published public private(set) var mode: Mode = .list
     @Published public private(set) var operation: Operation = .idle
+    @Published public private(set) var activity: Activity?
     @Published public private(set) var log: [String] = []
     @Published public private(set) var error: String?
     @Published public private(set) var scriptMissing = false
@@ -132,25 +179,34 @@ public final class WorktreeStore: ObservableObject {
         mode = .clear(project)
     }
 
+    /// Leaves a form (or the activity log). A running operation keeps going in
+    /// the background, and its log stays available from the header.
     public func backToList() {
-        guard !isBusy else { return }
-        resetOperation()
         mode = .list
+    }
+
+    /// Shows the running or last operation's log.
+    public func showActivity() {
+        guard activity != nil else { return }
+        mode = .activity
     }
 
     private func resetOperation() {
         operation = .idle
         log = []
+        activity = nil
     }
 
     // MARK: Operations
 
     public func create(branch: String, base: String, runSetup: Bool) async {
         guard !isBusy, let project = selectedProject else { return }
+        activity = Activity(kind: .create(branch: branch), project: project.name)
         let command = SproutCLI.createCommand(project: project.name, branch: branch, base: base, runSetup: runSetup)
         let outcome = await perform(command)
         await loadStatus()
-        if case .succeeded = outcome,
+        // Only jump to the new worktree if the user is still on its project.
+        if case .succeeded = outcome, selectedProjectName == project.name,
            let created = selectedProject?.worktrees.first(where: { $0.branch == branch }) {
             selectedWorktreePath = created.path
         }
@@ -159,6 +215,7 @@ public final class WorktreeStore: ObservableObject {
 
     public func delete(_ worktree: Worktree, force: Bool, dropData: Bool) async {
         guard !isBusy, let project = selectedProject else { return }
+        activity = Activity(kind: .delete(branch: worktree.branch), project: project.name)
         let command = SproutCLI.deleteCommand(
             project: project.name, folder: worktree.folder, force: force, keepData: !dropData)
         let outcome = await perform(command)
@@ -171,6 +228,7 @@ public final class WorktreeStore: ObservableObject {
 
     public func clear(_ project: Project, force: Bool, dropData: Bool) async {
         guard !isBusy else { return }
+        activity = Activity(kind: .clear, project: project.name)
         let command = SproutCLI.clearCommand(project: project.name, force: force, keepData: !dropData)
         let outcome = await perform(command)
         await loadStatus()

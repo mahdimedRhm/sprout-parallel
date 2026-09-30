@@ -256,6 +256,18 @@ and whether the serve port is running.
 Click the leaf in the menu bar to show or hide the Sprout window. Drag its
 background to move it and its edges to resize it; it remembers where you left it.
 
+### Background operations
+
+Create, delete and clear keep running while you move around — switch projects,
+use terminals, anything. The header shows progress (`◌ creating feature/x in
+scooda…`, then `✓ created` / `✗ create failed`); click it or press `l` for the
+live log.
+
+If a worktree's own MySQL database can't be created (e.g. access denied), its
+`.env` gets `DB_DATABASE` cleared — so it can't silently use the main project's
+database — the create output ends with a warning, and Sprout shows
+`mysql ✗ not created` for it.
+
 ### Terminals
 
 Every worktree has its own terminal tabs below its details, running your login
@@ -277,10 +289,12 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 
 ### Keys
 
+Press `?` in Sprout for this list.
+
 | Key | Action |
 |---|---|
-| `↑` `↓` | select worktree |
-| `⇧↑` `⇧↓` | select project |
+| `←` `→` | previous / next project |
+| `↑` `↓` | previous / next worktree |
 | `⏎` | open in VS Code |
 | `t` | open in Warp |
 | `f` | reveal in Finder |
@@ -288,9 +302,13 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 | `n` | new worktree in the selected project |
 | `⌫` | delete the selected worktree |
 | `⇧X` | clear all worktrees of the selected project |
+| `r` / `⌘R` | refresh |
+| `l` | log of the running / last create, delete or clear |
+| `?` | keyboard cheat sheet |
 | ``⌃` `` | focus the terminal / back to the list |
-| `⌘T` / `⌘⇧W` | new terminal tab / close tab |
-| `r` | refresh |
+| `⌘T` / `⌘⇧W` (or `×`) | new terminal tab / close tab |
+| `⌘⇧[` / `⌘⇧]` | previous / next terminal tab |
+| `⌘1` … `⌘9` | go to terminal tab 1–9 |
 | `⌘⏎` / `esc` | confirm / back (in forms) |
 | `esc` / `⌘W` | hide the window (in the list) |
 
@@ -300,8 +318,10 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 cd app
 swift run SproutCoreChecks   # logic checks (no Xcode needed)
 swift run SproutTerminalChecks # terminal sessions + live zsh checks
+swift run SproutKeyChecks      # every shortcut, driven through a real window (~40s)
 swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
 bash ../tests/status_test.sh # status --json tests
 bash ../tests/clear_test.sh  # clear tests
 bash ../tests/serve_test.sh  # port + Herd link tests
+bash ../tests/db_setup_test.sh # failed database clone never points at the main DB
 ```

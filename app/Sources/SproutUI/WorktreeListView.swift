@@ -144,7 +144,11 @@ struct WorktreeDetail: View {
                     .foregroundStyle(worktree.isDirty ? Theme.amber : Theme.green)
             }
             KV("mysql") {
-                Text(worktree.mysqlDb ?? "—").foregroundStyle(worktree.mysqlDb == nil ? Theme.muted : Theme.violet)
+                if worktree.dbFailed == true {
+                    Text("✗ not created — see the create log").foregroundStyle(Theme.red)
+                } else {
+                    Text(worktree.mysqlDb ?? "—").foregroundStyle(worktree.mysqlDb == nil ? Theme.muted : Theme.violet)
+                }
             }
             KV("redis") { redis }
             KV("herd") {

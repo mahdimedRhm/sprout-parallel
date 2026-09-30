@@ -71,6 +71,7 @@ struct HeaderBar: View {
             Text("❯").foregroundStyle(Theme.green)
             Text("sprout").foregroundStyle(Theme.bright).fontWeight(.semibold)
             Text(rootLabel).foregroundStyle(Theme.muted)
+            ActivityChip()
             Spacer()
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(statusLabel(now: context.date)).foregroundStyle(Theme.muted)
@@ -144,7 +145,11 @@ struct ProjectSidebar: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            if store.mode == .list { store.selectProject(project.name) }
+            // Allowed while an operation runs in the background too.
+            if store.mode == .list || store.isBusy {
+                store.backToList()
+                store.selectProject(project.name)
+            }
         }
     }
 }
@@ -195,26 +200,24 @@ struct FooterBar: View {
     /// Lower-priority hints dropped, for narrow windows.
     private var shortHints: [Hint] {
         guard store.mode == .list else { return hints }
-        return [Hint(key: "⏎", label: "code", primary: true), Hint(key: "n", label: "new"),
-                Hint(key: "⌃`", label: "terminal"), Hint(key: "⌘T", label: "tab"),
-                Hint(key: "↑↓", label: "move")]
+        return [Hint(key: "⏎", label: "code", primary: true), Hint(key: "⌃`", label: "terminal"),
+                Hint(key: "?", label: "keys", primary: true)]
     }
 
     private var hints: [Hint] {
         switch store.mode {
         case .list:
-            [Hint(key: "⏎", label: "code", primary: true), Hint(key: "t", label: "warp"),
-             Hint(key: "f", label: "finder"), Hint(key: "o", label: "open"),
-             Hint(key: "n", label: "new"),
-             Hint(key: "⌫", label: "delete"), Hint(key: "⇧X", label: "clear all"),
-             Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move"),
-             Hint(key: "⌃`", label: "terminal"), Hint(key: "⌘T", label: "tab")]
+            [Hint(key: "⏎", label: "code", primary: true), Hint(key: "←→↑↓", label: "move"),
+             Hint(key: "n", label: "new"), Hint(key: "⌃`", label: "terminal"),
+             Hint(key: "⌘T", label: "tab"), Hint(key: "?", label: "keys", primary: true)]
         case .create:
             [Hint(key: "⌘⏎", label: "create", primary: true), Hint(key: "esc", label: "back")]
         case .delete:
             [Hint(key: "⌘⏎", label: "delete", primary: true), Hint(key: "esc", label: "back")]
         case .clear:
             [Hint(key: "⌘⏎", label: "clear all", primary: true), Hint(key: "esc", label: "back")]
+        case .activity:
+            [Hint(key: "esc", label: "back", primary: true)]
         }
     }
 }
@@ -244,5 +247,58 @@ struct ScriptMissingView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// The running or last create/delete/clear, in the header. Click (or `l`) for its log.
+struct ActivityChip: View {
+    @EnvironmentObject private var store: WorktreeStore
+
+    var body: some View {
+        if let activity = store.activity {
+            Button { store.showActivity() } label: {
+                HStack(spacing: 4) {
+                    switch store.operation {
+                    case .running:
+                        BlinkingText(text: "◌ \(activity.runningTitle)…", color: Theme.green)
+                    case .succeeded:
+                        Text("✓ \(activity.doneTitle)").foregroundStyle(Theme.green)
+                    case .failed:
+                        Text("✗ \(activity.failedTitle)").foregroundStyle(Theme.red)
+                    case .idle:
+                        EmptyView()
+                    }
+                    KeyHint(key: "l", label: "log")
+                }
+                .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 12)
+            .help("show the log")
+        }
+    }
+}
+
+/// The running or last operation's live log, reopened from the header.
+struct ActivityView: View {
+    @EnvironmentObject private var store: WorktreeStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).foregroundStyle(Theme.bright).padding(.bottom, 4)
+            LogView()
+            Spacer(minLength: 0)
+            ActionChip(key: "esc", label: "back") { store.backToList() }
+                .font(Theme.mono(11))
+        }
+    }
+
+    private var title: String {
+        guard let activity = store.activity else { return "" }
+        switch store.operation {
+        case .running: return activity.runningTitle
+        case .failed: return activity.failedTitle
+        default: return activity.doneTitle
+        }
     }
 }

@@ -120,30 +120,50 @@ copy_dir_from_project() {
   fi
 }
 
+# mark_db_not_created: when a worktree's own database couldn't be made, clear
+# DB_DATABASE so the worktree fails fast instead of silently using the main
+# project's database, and remember why for the end-of-setup warning
+#   $1: path to the worktree .env  $2: main database name  $3: reason
+mark_db_not_created() {
+  set_env_var DB_DATABASE "" "$1"
+  set_env_var SPROUT_DB_FAILED 1 "$1"
+  DB_SETUP_FAILURE="$3 — DB_DATABASE was '$2' (the main project's database) and has been cleared"
+}
+
 setup_db() {
   local dir="$1"
   local folder_name="$2"
   local env_file="$dir/.env"
 
-  if ! command -v mysql > /dev/null 2>&1; then
-    echo "  Warning: mysql not found — skipping database setup."
-    return 0
-  fi
-
   [[ -f "$env_file" ]] || return 0
 
-  local src_db db_user db_pass db_host db_port
+  local src_db db_user db_pass db_host db_port db_connection
   src_db="$(parse_env_var DB_DATABASE "$env_file")"
   db_user="$(parse_env_var DB_USERNAME "$env_file")"
   db_pass="$(parse_env_var DB_PASSWORD "$env_file")"
   db_host="$(parse_env_var DB_HOST "$env_file")"
   db_port="$(parse_env_var DB_PORT "$env_file")"
+  db_connection="$(parse_env_value DB_CONNECTION "$env_file")"
 
   db_host="${db_host:-127.0.0.1}"
   db_port="${db_port:-3306}"
 
-  if [[ -z "$src_db" || -z "$db_user" ]]; then
+  # Only MySQL/MariaDB databases are cloned (sqlite etc. are left alone)
+  case "$db_connection" in
+    ""|mysql|mariadb) ;;
+    *) return 0 ;;
+  esac
+  [[ -n "$src_db" ]] || return 0
+
+  if ! command -v mysql > /dev/null 2>&1; then
+    echo "  Warning: mysql not found — skipping database setup."
+    mark_db_not_created "$env_file" "$src_db" "mysql is not installed"
+    return 0
+  fi
+
+  if [[ -z "$db_user" ]]; then
     echo "  Warning: Could not parse DB credentials from .env — skipping database setup."
+    mark_db_not_created "$env_file" "$src_db" "no DB_USERNAME in .env"
     return 0
   fi
 
@@ -156,6 +176,7 @@ setup_db() {
   if ! mysql $mysql_opts -e "CREATE DATABASE IF NOT EXISTS \`${new_db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>&1; then
     echo "  Warning: Failed to create database '$new_db' — skipping."
     unset MYSQL_PWD
+    mark_db_not_created "$env_file" "$src_db" "MySQL refused to create '$new_db'"
     return 0
   fi
 
@@ -425,6 +446,7 @@ run_setup() {
   local proj_path="${2:-}"
   local folder_name="${3:-}"
   local ran_any=false
+  DB_SETUP_FAILURE=""
 
   echo ""
   echo "Running setup in $dir ..."
@@ -506,6 +528,13 @@ run_setup() {
   if [[ "$ran_any" == false ]]; then
     echo "  (nothing to set up)"
   fi
+
+  # Last thing printed, so it can't be missed in a long setup log
+  if [[ -n "$DB_SETUP_FAILURE" ]]; then
+    echo ""
+    echo "Warning: DATABASE NOT CREATED: $DB_SETUP_FAILURE."
+    echo "Warning: Fix MySQL access in the main project's .env, then delete and re-create this worktree."
+  fi
 }
 
 # ─── Status (JSON) ────────────────────────────────────────────────────────────
@@ -570,7 +599,7 @@ worktree_json() {
     last="{\"hash\":$(json_str "$hash"),\"subject\":$(json_str "$subject"),\"when\":$(json_str "$when")}"
   fi
 
-  local mysql_db="" redis_db="" redis_prefix="" herd_url="" serve_port="" app_url=""
+  local mysql_db="" redis_db="" redis_prefix="" herd_url="" serve_port="" app_url="" db_failed=""
   if [[ -f "$env_file" ]]; then
     mysql_db="$(parse_env_value DB_DATABASE "$env_file")"
     redis_db="$(parse_env_value REDIS_DB "$env_file")"
@@ -578,6 +607,7 @@ worktree_json() {
     herd_url="$(parse_env_value SPROUT_HERD_URL "$env_file")"
     serve_port="$(parse_env_value SERVER_PORT "$env_file")"
     app_url="$(parse_env_value APP_URL "$env_file")"
+    db_failed="$(parse_env_value SPROUT_DB_FAILED "$env_file")"
   fi
 
   # Worktrees from before SERVER_PORT: fall back to a local APP_URL's port
@@ -594,7 +624,7 @@ worktree_json() {
     fi
   fi
 
-  printf '{"branch":%s,"folder":%s,"path":%s,"base":%s,"changes":%s,"ahead":%s,"behind":%s,"lastCommit":%s,"mysqlDb":%s,"redisDb":%s,"redisPrefix":%s,"herdUrl":%s,"serveUrl":%s,"serveRunning":%s}' \
+  printf '{"branch":%s,"folder":%s,"path":%s,"base":%s,"changes":%s,"ahead":%s,"behind":%s,"lastCommit":%s,"mysqlDb":%s,"redisDb":%s,"redisPrefix":%s,"herdUrl":%s,"serveUrl":%s,"serveRunning":%s,"dbFailed":%s}' \
     "$(json_str "$branch")" \
     "$(json_str "$(basename "$wt")")" \
     "$(json_str "$wt")" \
@@ -608,7 +638,8 @@ worktree_json() {
     "$(json_str_or_null "$redis_prefix")" \
     "$(json_str_or_null "$herd_url")" \
     "$(json_str_or_null "$serve_url")" \
-    "$serve_running"
+    "$serve_running" \
+    "$([[ "$db_failed" == 1 ]] && echo true || echo false)"
 }
 
 # project_json: print one project (with branches and worktrees) as JSON
