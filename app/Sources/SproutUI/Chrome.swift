@@ -195,20 +195,16 @@ struct FooterBar: View {
     /// Lower-priority hints dropped, for narrow windows.
     private var shortHints: [Hint] {
         guard store.mode == .list else { return hints }
-        return [Hint(key: "⏎", label: "code", primary: true), Hint(key: "n", label: "new"),
-                Hint(key: "⌃`", label: "terminal"), Hint(key: "⌘T", label: "tab"),
-                Hint(key: "↑↓", label: "move")]
+        return [Hint(key: "⏎", label: "code", primary: true), Hint(key: "⌃`", label: "terminal"),
+                Hint(key: "?", label: "keys", primary: true)]
     }
 
     private var hints: [Hint] {
         switch store.mode {
         case .list:
-            [Hint(key: "⏎", label: "code", primary: true), Hint(key: "t", label: "warp"),
-             Hint(key: "f", label: "finder"), Hint(key: "o", label: "open"),
-             Hint(key: "n", label: "new"),
-             Hint(key: "⌫", label: "delete"), Hint(key: "⇧X", label: "clear all"),
-             Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move"),
-             Hint(key: "⌃`", label: "terminal"), Hint(key: "⌘T", label: "tab")]
+            [Hint(key: "⏎", label: "code", primary: true), Hint(key: "←→↑↓", label: "move"),
+             Hint(key: "n", label: "new"), Hint(key: "⌃`", label: "terminal"),
+             Hint(key: "⌘T", label: "tab"), Hint(key: "?", label: "keys", primary: true)]
         case .create:
             [Hint(key: "⌘⏎", label: "create", primary: true), Hint(key: "esc", label: "back")]
         case .delete:

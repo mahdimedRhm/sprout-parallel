@@ -21,6 +21,8 @@ public final class WorktreeStore: ObservableObject {
     @Published public private(set) var projects: [Project] = []
     @Published public var selectedProjectName: String?
     @Published public var selectedWorktreePath: String?
+    /// The keyboard cheat sheet (`?`) is showing.
+    @Published public var showingKeys = false
     @Published public private(set) var mode: Mode = .list
     @Published public private(set) var operation: Operation = .idle
     @Published public private(set) var log: [String] = []

@@ -277,10 +277,12 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 
 ### Keys
 
+Press `?` in Sprout for this list.
+
 | Key | Action |
 |---|---|
-| `↑` `↓` | select worktree |
-| `⇧↑` `⇧↓` | select project |
+| `←` `→` | previous / next project |
+| `↑` `↓` | previous / next worktree |
 | `⏎` | open in VS Code |
 | `t` | open in Warp |
 | `f` | reveal in Finder |
@@ -288,9 +290,12 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 | `n` | new worktree in the selected project |
 | `⌫` | delete the selected worktree |
 | `⇧X` | clear all worktrees of the selected project |
+| `r` / `⌘R` | refresh |
+| `?` | keyboard cheat sheet |
 | ``⌃` `` | focus the terminal / back to the list |
-| `⌘T` / `⌘⇧W` | new terminal tab / close tab |
-| `r` | refresh |
+| `⌘T` / `⌘⇧W` (or `×`) | new terminal tab / close tab |
+| `⌘⇧[` / `⌘⇧]` | previous / next terminal tab |
+| `⌘1` … `⌘9` | go to terminal tab 1–9 |
 | `⌘⏎` / `esc` | confirm / back (in forms) |
 | `esc` / `⌘W` | hide the window (in the list) |
 
@@ -300,6 +305,7 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 cd app
 swift run SproutCoreChecks   # logic checks (no Xcode needed)
 swift run SproutTerminalChecks # terminal sessions + live zsh checks
+swift run SproutKeyChecks      # every shortcut, driven through a real window (~40s)
 swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
 bash ../tests/status_test.sh # status --json tests
 bash ../tests/clear_test.sh  # clear tests

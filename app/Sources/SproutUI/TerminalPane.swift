@@ -40,12 +40,15 @@ struct TerminalPane: View {
                     ForEach(terminals.tabs(for: path), id: \.id) { tab in
                         TerminalTabButton(
                             title: tab.title, busy: tab.isBusy,
-                            active: terminals.activeTab(for: path)?.id == tab.id
-                        ) {
-                            terminals.activate(tab.id, in: path)
-                            collapsed = false
-                            focusTerminal(path)
-                        }
+                            active: terminals.activeTab(for: path)?.id == tab.id,
+                            action: {
+                                terminals.activate(tab.id, in: path)
+                                collapsed = false
+                                focusTerminal(path)
+                            },
+                            close: {
+                                if confirmClosingTab(tab) { terminals.closeTab(tab.id, in: path) }
+                            })
                     }
                     Button {
                         terminals.openTab(in: path)
@@ -95,27 +98,56 @@ struct TerminalPane: View {
     }
 }
 
+/// Asks before closing a tab whose command is still running. True = close it.
+@MainActor
+func confirmClosingTab(_ tab: any TerminalHandle) -> Bool {
+    guard tab.isBusy else { return true }
+    let alert = NSAlert()
+    alert.messageText = "Close “\(tab.title)”?"
+    alert.informativeText = "It's still running. Closing the tab stops it."
+    alert.addButton(withTitle: "Close Tab")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
+}
+
 private struct TerminalTabButton: View {
     let title: String
     let busy: Bool
     let active: Bool
     let action: () -> Void
+    let close: () -> Void
+    @State private var closeHovered = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                if busy { Text("●").foregroundStyle(Theme.green) }
-                Text(title).lineLimit(1).truncationMode(.middle).frame(maxWidth: 180).fixedSize(horizontal: true, vertical: false)
+        HStack(spacing: 6) {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    if busy { Text("●").foregroundStyle(Theme.green) }
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 180)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
-            .foregroundStyle(active ? Theme.bright : Theme.muted)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(active ? Theme.logBg : Color.clear)
-            .overlay(alignment: .top) {
-                if active { Rectangle().fill(Theme.green).frame(height: 2) }
+            .buttonStyle(.plain)
+            Button(action: close) {
+                Text("×")
+                    .foregroundStyle(closeHovered ? Theme.red : Theme.muted)
+                    .opacity(active || closeHovered ? 1 : 0.6)
             }
+            .buttonStyle(.plain)
+            .onHover { closeHovered = $0 }
+            .help("close tab (⌘⇧W)")
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(active ? Theme.bright : Theme.muted)
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .background(active ? Theme.logBg : Color.clear)
+        .overlay(alignment: .top) {
+            if active { Rectangle().fill(Theme.green).frame(height: 2) }
+        }
     }
 }
 

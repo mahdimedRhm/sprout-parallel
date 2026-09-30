@@ -184,3 +184,7 @@ if let path = withTerminals.selectedWorktree?.path {
     busyTerminals.openTab(in: path)
 }
 render("terminal-tabs", withTerminals, terminals: busyTerminals)
+
+let withKeys = await makeStore(ok)
+withKeys.showingKeys = true
+render("keys", withKeys)

@@ -90,6 +90,22 @@ public final class TerminalSessions: ObservableObject {
         activeByPath[path] = id
     }
 
+    /// Activates the tab `offset` places from the active one, wrapping around.
+    public func activateNeighbour(of path: String, by offset: Int) {
+        let tabs = tabs(for: path)
+        guard !tabs.isEmpty else { return }
+        let current = tabs.firstIndex { $0.id == activeTab(for: path)?.id } ?? 0
+        let target = ((current + offset) % tabs.count + tabs.count) % tabs.count
+        activeByPath[path] = tabs[target].id
+    }
+
+    /// Activates the tab at `index` (0-based); ignored past the last tab.
+    public func activateTab(at index: Int, in path: String) {
+        let tabs = tabs(for: path)
+        guard tabs.indices.contains(index) else { return }
+        activeByPath[path] = tabs[index].id
+    }
+
     public func closeTab(_ id: UUID, in path: String) {
         tabs(for: path).first { $0.id == id }?.terminate()
         remove(id, in: path)

@@ -5,10 +5,10 @@ import SwiftUI
 
 public struct PanelView: View {
     @EnvironmentObject private var store: WorktreeStore
-    @FocusState private var focused: Bool
     @EnvironmentObject private var terminals: TerminalSessions
     @AppStorage("sprout.terminalCollapsed") private var terminalCollapsed = false
     @State private var windowBox = WindowBox()
+    @State private var keyMonitor = KeyMonitor()
 
     public static let minimumSize = CGSize(width: 620, height: 400)
 
@@ -46,26 +46,15 @@ public struct PanelView: View {
         .font(Theme.mono())
         .foregroundStyle(Theme.text)
         .environment(\.colorScheme, .dark)
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .onKeyPress(action: handleKey)
         .background { terminalShortcuts }
-        .onChange(of: store.mode) { _, mode in
-            focused = mode == .list
-        }
-        .task {
-            focused = true
-            await store.refresh()
-        }
+        .overlay { if store.showingKeys { KeyCheatSheet() } }
+        .onAppear { keyMonitor.install(handleListKey) }
+        .onDisappear { keyMonitor.remove() }
+        .task { await store.refresh() }
         .background(WindowAccessor(box: windowBox))
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
             // Alerts and other windows becoming key aren't ours to react to.
             if let window = windowBox.window, note.object as? NSWindow !== window { return }
-            // Coming back to the panel must not steal focus from the terminal.
-            if !terminals.terminalHasFocus {
-                focused = store.mode == .list
-            }
             Task { await store.refresh() }
         }
         .onChange(of: terminals.focusLostCount) { _, _ in
@@ -74,8 +63,23 @@ public struct PanelView: View {
             if let path = terminalPath, !terminalCollapsed, terminals.activeTab(for: path) != nil {
                 focusTerminal(in: path)
             } else {
-                focused = true
+                focusList()
             }
+        }
+        .onChange(of: terminalCollapsed) { _, collapsed in
+            // Collapsing removes a focused terminal from the window; hand keys to the list.
+            guard collapsed else { return }
+            DispatchQueue.main.async {
+                if let window = windowBox.window, window.firstResponder === window { focusList() }
+            }
+        }
+    }
+
+    /// Hands the keyboard back to the list: takes first responder away from any
+    /// terminal so `handleListKey` sees the keys again.
+    private func focusList() {
+        if let window = windowBox.window, let host = window.contentView {
+            window.makeFirstResponder(host)
         }
     }
 
@@ -99,7 +103,15 @@ public struct PanelView: View {
         ZStack {
             Button("", action: toggleTerminalFocus).keyboardShortcut("`", modifiers: .control)
             Button("", action: newTerminalTab).keyboardShortcut("t", modifiers: .command)
-            Button("", action: closeTerminalTab).keyboardShortcut("w", modifiers: [.command, .shift])
+            // SwiftUI matches shifted shortcuts by the shifted character: ⌘⇧W is "W", ⌘⇧[ is "{".
+            Button("", action: closeTerminalTab).keyboardShortcut("W", modifiers: [.command, .shift])
+            Button("") { switchTab(by: -1) }.keyboardShortcut("{", modifiers: [.command, .shift])
+            Button("") { switchTab(by: 1) }.keyboardShortcut("}", modifiers: [.command, .shift])
+            ForEach(1..<10) { number in
+                Button("") { jumpToTab(number - 1) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
+            }
+            Button("") { Task { await store.refresh() } }.keyboardShortcut("r", modifiers: .command)
         }
         .opacity(0)
         .allowsHitTesting(false)
@@ -113,12 +125,23 @@ public struct PanelView: View {
         if let view = terminals.activeTab(for: path)?.view,
            let responder = view.window?.firstResponder as? NSView,
            responder === view || responder.isDescendant(of: view) {
-            view.window?.makeFirstResponder(nil)
-            focused = true
+            focusList()
             return
         }
         terminalCollapsed = false
         terminals.ensureTab(in: path)
+        focusTerminal(in: path)
+    }
+
+    private func switchTab(by offset: Int) {
+        guard let path = terminalPath else { return }
+        terminals.activateNeighbour(of: path, by: offset)
+        focusTerminal(in: path)
+    }
+
+    private func jumpToTab(_ index: Int) {
+        guard let path = terminalPath, terminals.tabs(for: path).indices.contains(index) else { return }
+        terminals.activateTab(at: index, in: path)
         focusTerminal(in: path)
     }
 
@@ -130,15 +153,8 @@ public struct PanelView: View {
     }
 
     private func closeTerminalTab() {
-        guard let path = terminalPath, let tab = terminals.activeTab(for: path) else { return }
-        if tab.isBusy {
-            let alert = NSAlert()
-            alert.messageText = "Close “\(tab.title)”?"
-            alert.informativeText = "It's still running. Closing the tab stops it."
-            alert.addButton(withTitle: "Close Tab")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
+        guard let path = terminalPath, let tab = terminals.activeTab(for: path),
+              confirmClosingTab(tab) else { return }
         terminals.closeTab(tab.id, in: path)
     }
 
@@ -152,33 +168,52 @@ public struct PanelView: View {
         }
     }
 
-    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
-        guard store.mode == .list else { return .ignored }
-        guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
-        let shift = press.modifiers.contains(.shift)
+    /// List shortcuts, read straight from AppKit key events. (SwiftUI's
+    /// focus-based `onKeyPress` also saw keys meant for the terminal and
+    /// re-took first responder from it.) Returns true when the key was used.
+    private func handleListKey(_ event: NSEvent) -> Bool {
+        guard let window = windowBox.window, event.window === window else { return false }
+        // Keys belong to the terminal, a text field being edited, or an open form.
+        guard store.mode == .list, !terminals.terminalHasFocus, !(window.firstResponder is NSText) else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.isDisjoint(with: [.command, .control, .option]) else { return false }
+        let shift = modifiers.contains(.shift)
         let worktree = store.selectedWorktree
 
-        switch press.key {
-        case .upArrow:
+        if store.showingKeys, event.keyCode == 53 || event.characters == "?" {
+            store.showingKeys = false
+            return true
+        }
+
+        switch event.keyCode {
+        case 123:  // ←
+            store.moveProject(by: -1)
+            return true
+        case 124:  // →
+            store.moveProject(by: 1)
+            return true
+        case 126:  // ↑
             shift ? store.moveProject(by: -1) : store.moveWorktree(by: -1)
-            return .handled
-        case .downArrow:
+            return true
+        case 125:  // ↓
             shift ? store.moveProject(by: 1) : store.moveWorktree(by: 1)
-            return .handled
-        case .return:
+            return true
+        case 36, 76:  // return, enter
             if let worktree { Openers.vscode(worktree.path) }
-            return .handled
-        case .delete:
+            return true
+        case 51:  // backspace
             store.beginDelete()
-            return .handled
-        case .escape:
-            NSApp.keyWindow?.orderOut(nil)
-            return .handled
+            return true
+        case 53:  // esc
+            window.orderOut(nil)
+            return true
         default:
             break
         }
 
-        switch press.characters {
+        switch event.characters {
         case "t":
             if let worktree { Openers.warp(worktree.path) }
         case "f":
@@ -193,10 +228,30 @@ public struct PanelView: View {
             store.beginClear()
         case "r":
             Task { await store.refresh() }
+        case "?":
+            store.showingKeys = true
         default:
-            return .ignored
+            return false
         }
-        return .handled
+        return true
+    }
+}
+
+/// Owns a local key-down monitor for the panel.
+final class KeyMonitor {
+    private var token: Any?
+
+    @MainActor
+    func install(_ handler: @escaping @MainActor (NSEvent) -> Bool) {
+        guard token == nil else { return }
+        token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            MainActor.assumeIsolated { handler(event) } ? nil : event
+        }
+    }
+
+    func remove() {
+        if let token { NSEvent.removeMonitor(token) }
+        token = nil
     }
 }
 
@@ -209,12 +264,26 @@ private struct WindowAccessor: NSViewRepresentable {
     let box: WindowBox
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { [weak view] in box.window = view?.window }
-        return view
+        WindowTrackingView(box: box)
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        if box.window == nil { box.window = view.window }
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+
+/// Records its window whenever it joins one — not once on a timer, which could
+/// run before the view is in the window and leave the box empty for good.
+private final class WindowTrackingView: NSView {
+    private let box: WindowBox
+
+    init(box: WindowBox) {
+        self.box = box
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { box.window = window }
     }
 }
