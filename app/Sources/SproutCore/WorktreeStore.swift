@@ -20,6 +20,7 @@ public final class WorktreeStore: ObservableObject {
             case create(branch: String)
             case delete(branch: String)
             case clear
+            case database(DatabaseAction, branch: String)
         }
 
         public let kind: Kind
@@ -35,6 +36,12 @@ public final class WorktreeStore: ObservableObject {
             case .create(let branch): "creating \(branch) in \(project)"
             case .delete(let branch): "deleting \(branch) in \(project)"
             case .clear: "clearing \(project)"
+            case .database(let action, let branch):
+                switch action {
+                case .create: "creating the database of \(branch)"
+                case .refresh: "refreshing the database of \(branch)"
+                case .drop: "dropping the database of \(branch)"
+                }
             }
         }
 
@@ -43,6 +50,12 @@ public final class WorktreeStore: ObservableObject {
             case .create(let branch): "created \(branch)"
             case .delete(let branch): "deleted \(branch)"
             case .clear: "cleared \(project)"
+            case .database(let action, let branch):
+                switch action {
+                case .create: "database created for \(branch)"
+                case .refresh: "database refreshed for \(branch)"
+                case .drop: "database dropped for \(branch)"
+                }
             }
         }
 
@@ -51,6 +64,7 @@ public final class WorktreeStore: ObservableObject {
             case .create: "create failed"
             case .delete: "delete failed"
             case .clear: "clear failed"
+            case .database(let action, _): "database \(action.rawValue) failed"
             }
         }
     }
@@ -67,6 +81,13 @@ public final class WorktreeStore: ObservableObject {
     @Published public var selectedWorktreePath: String?
     /// The keyboard cheat sheet (`?`) is showing.
     @Published public var showingKeys = false
+
+    /// The command palette's query; nil when it's closed.
+    @Published public var palette: String? {
+        didSet { if palette != oldValue { paletteSelection = 0 } }
+    }
+    /// The highlighted row in the palette.
+    @Published public var paletteSelection = 0
     @Published public private(set) var mode: Mode = .list
     @Published public private(set) var operation: Operation = .idle
     @Published public private(set) var activity: Activity?
@@ -230,6 +251,16 @@ public final class WorktreeStore: ObservableObject {
         guard !isBusy else { return }
         activity = Activity(kind: .clear, project: project.name)
         let command = SproutCLI.clearCommand(project: project.name, force: force, keepData: !dropData)
+        let outcome = await perform(command)
+        await loadStatus()
+        operation = outcome
+    }
+
+    public func database(_ action: DatabaseAction, worktree: Worktree) async {
+        guard !isBusy, let project = selectedProject else { return }
+        resetOperation()
+        activity = Activity(kind: .database(action, branch: worktree.branch), project: project.name)
+        let command = SproutCLI.dbCommand(action: action, project: project.name, folder: worktree.folder)
         let outcome = await perform(command)
         await loadStatus()
         operation = outcome

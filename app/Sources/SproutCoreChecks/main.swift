@@ -6,5 +6,6 @@ await shellChecks()
 await cliChecks()
 await liveChecks()
 await storeChecks()
+await actionChecks()
 
 finishChecks()
