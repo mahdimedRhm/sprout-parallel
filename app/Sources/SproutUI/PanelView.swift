@@ -49,7 +49,7 @@ public struct PanelView: View {
         .environment(\.colorScheme, .dark)
         .background { terminalShortcuts }
         .overlay { if store.showingKeys { KeyCheatSheet() } }
-        .overlay { if store.palette != nil { CommandPalette(actions: paletteActions) } }
+        .overlay { if store.palette != nil { CommandPalette(actions: paletteActions, onClose: closePalette, onRun: runPaletteAction) } }
         .onAppear { keyMonitor.install(handleListKey) }
         .onDisappear { keyMonitor.remove() }
         .task { await store.refresh() }
@@ -99,11 +99,23 @@ public struct PanelView: View {
     /// Closes the palette and puts the keyboard back where it was.
     private func closePalette() {
         store.palette = nil
+        restorePaletteFocus()
+    }
+
+    private func restorePaletteFocus() {
         if paletteFromTerminal, let path = terminalPath {
             focusTerminal(in: path)
         } else {
             focusList()
         }
+    }
+
+    /// Runs an action, then restores focus only if we're still on the list;
+    /// a form the action opened keeps the keyboard.
+    private func runPaletteAction(_ action: PaletteAction) {
+        store.palette = nil
+        action.run()
+        if store.mode == .list { restorePaletteFocus() }
     }
 
     /// ↑ ↓ ⏎ esc while the palette is open; other keys go to its search field.
@@ -120,8 +132,7 @@ public struct PanelView: View {
             guard actions.indices.contains(store.paletteSelection) else { return true }
             let action = actions[store.paletteSelection]
             guard action.unavailable == nil else { return true }
-            closePalette()
-            action.run()
+            runPaletteAction(action)
         default:
             return false
         }

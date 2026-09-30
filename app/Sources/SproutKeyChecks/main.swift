@@ -371,6 +371,18 @@ func keyChecks() async {
     await press(.returnKey, window)
     checkEqual(opened, ["finder:\(pathX)"], "the palette runs actions opened from the terminal")
     check(await waitUntil(2) { terminals.terminalHasFocus }, "closing the palette returns focus to the terminal")
+
+    // An action that opens a form keeps the keyboard for the form, not the terminal.
+    await shortcut("P", [.command, .shift], window)
+    check(await waitUntil(2) { store.palette != nil }, "⌘⇧P opens the palette again from the terminal")
+    await type("worktree new", into: window)
+    await pause(0.2)
+    await press(.returnKey, window)
+    checkEqual(store.mode, .create, "worktree: new opens the create form")
+    await pause(1)
+    check(!terminals.terminalHasFocus, "the form keeps the keyboard; the terminal doesn't take it back")
+    await press(.escape, window)
+    checkEqual(store.mode, .list, "esc leaves the form")
     Openers.intercept = nil
 }
 

@@ -100,13 +100,15 @@ private func confirmAction(_ message: String, _ detail: String) -> Bool {
 struct CommandPalette: View {
     @EnvironmentObject private var store: WorktreeStore
     let actions: [PaletteAction]
+    let onClose: () -> Void
+    let onRun: (PaletteAction) -> Void
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
         ZStack(alignment: .top) {
             Color.black.opacity(0.45)
                 .contentShape(Rectangle())
-                .onTapGesture { store.palette = nil }
+                .onTapGesture { onClose() }
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
                     Text("❯").foregroundStyle(Theme.green)
@@ -128,8 +130,7 @@ struct CommandPalette: View {
                                     .onTapGesture {
                                         store.paletteSelection = index
                                         guard action.unavailable == nil else { return }
-                                        store.palette = nil
-                                        action.run()
+                                        onRun(action)
                                     }
                             }
                             if actions.isEmpty {
