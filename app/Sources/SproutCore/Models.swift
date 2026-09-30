@@ -30,9 +30,15 @@ public struct Worktree: Codable, Equatable, Hashable, Identifiable {
     public let mysqlDb: String?
     public let redisDb: Int?
     public let redisPrefix: String?
+    /// Absent in output from older versions of the script, hence optional.
+    public let herdUrl: String?
+    public let serveUrl: String?
+    public let serveRunning: Bool?
 
     public var id: String { path }
     public var isDirty: Bool { changes > 0 }
+    /// Something is listening on the worktree's `php artisan serve` port.
+    public var isServing: Bool { serveRunning ?? false }
 }
 
 public struct LastCommit: Codable, Equatable, Hashable {

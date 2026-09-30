@@ -85,6 +85,10 @@ struct WorktreeRow: View {
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
             SyncText(ahead: worktree.ahead, behind: worktree.behind).frame(width: 72, alignment: .leading)
+            Text(worktree.serveUrl == nil ? "—" : "●")
+                .foregroundStyle(worktree.isServing ? Theme.green : Theme.muted)
+                .help(worktree.isServing ? "serving on \(worktree.serveUrl ?? "")" : "not serving")
+                .frame(width: 44, alignment: .leading)
             Text(worktree.redisDb.map { "db:\($0)" } ?? "—")
                 .foregroundStyle(worktree.redisDb == nil ? Theme.muted : Theme.cyan)
                 .frame(width: 44, alignment: .leading)
@@ -101,6 +105,7 @@ struct WorktreeRow: View {
             Text("").frame(width: 12)
             Text("BRANCH").frame(maxWidth: .infinity, alignment: .leading)
             Text("SYNC").frame(width: 72, alignment: .leading)
+            Text("SERVE").frame(width: 44, alignment: .leading)
             Text("REDIS").frame(width: 44, alignment: .leading)
         }
         .font(Theme.mono(10))
@@ -142,6 +147,28 @@ struct WorktreeDetail: View {
                 Text(worktree.mysqlDb ?? "—").foregroundStyle(worktree.mysqlDb == nil ? Theme.muted : Theme.violet)
             }
             KV("redis") { redis }
+            KV("herd") {
+                if let url = worktree.herdUrl {
+                    Button(url) { Openers.browser(url) }.buttonStyle(.plain).foregroundStyle(Theme.cyan)
+                } else {
+                    Text("—").foregroundStyle(Theme.muted)
+                }
+            }
+            KV("serve") {
+                if let url = worktree.serveUrl {
+                    HStack(spacing: 6) {
+                        Text("●").foregroundStyle(worktree.isServing ? Theme.green : Theme.muted)
+                        Button(url) { Openers.browser(url) }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(worktree.isServing ? Theme.cyan : Theme.muted)
+                        if !worktree.isServing {
+                            Text("not running · php artisan serve").foregroundStyle(Theme.muted)
+                        }
+                    }
+                } else {
+                    Text("—").foregroundStyle(Theme.muted)
+                }
+            }
             KV("path") {
                 Text((worktree.path as NSString).abbreviatingWithTildeInPath)
                     .foregroundStyle(Theme.muted)
@@ -152,6 +179,12 @@ struct WorktreeDetail: View {
                 ActionChip(key: "⏎", label: "code", tint: Theme.green) { Openers.vscode(worktree.path) }
                 ActionChip(key: "t", label: "warp") { Openers.warp(worktree.path) }
                 ActionChip(key: "f", label: "finder") { Openers.finder(worktree.path) }
+                if let url = worktree.herdUrl {
+                    ActionChip(key: "o", label: "herd") { Openers.browser(url) }
+                }
+                if let url = worktree.serveUrl {
+                    ActionChip(key: "⇧O", label: "serve") { Openers.browser(url) }
+                }
                 ActionChip(key: "⌫", label: "delete", tint: Theme.red) { store.beginDelete() }
             }
             .font(Theme.mono(11))

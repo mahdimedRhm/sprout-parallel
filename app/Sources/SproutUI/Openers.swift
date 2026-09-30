@@ -9,6 +9,11 @@ public enum Openers {
         open(["-a", "Warp", path])
     }
 
+    public static func browser(_ url: String) {
+        guard let url = URL(string: url) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     public static func finder(_ path: String) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }

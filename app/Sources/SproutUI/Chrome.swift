@@ -184,7 +184,8 @@ struct FooterBar: View {
         switch store.mode {
         case .list:
             [Hint(key: "⏎", label: "code", primary: true), Hint(key: "t", label: "warp"),
-             Hint(key: "f", label: "finder"), Hint(key: "n", label: "new"),
+             Hint(key: "f", label: "finder"), Hint(key: "o", label: "open"),
+             Hint(key: "n", label: "new"),
              Hint(key: "⌫", label: "delete"), Hint(key: "⇧X", label: "clear all"),
              Hint(key: "r", label: "refresh"), Hint(key: "↑↓", label: "move")]
         case .create:

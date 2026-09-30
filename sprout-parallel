@@ -314,6 +314,112 @@ clear_worktree_redis() {
   unset REDISCLI_AUTH
 }
 
+# port_listening: true if something is listening on TCP port $1
+port_listening() {
+  command -v lsof > /dev/null 2>&1 || return 1
+  lsof -nP "-iTCP:$1" -sTCP:LISTEN -t > /dev/null 2>&1
+}
+
+# allocate_serve_port: print the lowest port from 8001 that no worktree's
+# SERVER_PORT claims and nothing is listening on. Returns 1 if none free.
+allocate_serve_port() {
+  local used=" " f value port
+  for f in "$SPROUT_PROJECTS_ROOT"/*-worktrees/*/.env; do
+    [[ -f "$f" ]] || continue
+    value="$(parse_env_value SERVER_PORT "$f")"
+    [[ "$value" =~ ^[0-9]+$ ]] && used="$used$value "
+  done
+
+  for ((port = 8001; port < 9000; port++)); do
+    [[ "$used" == *" $port "* ]] && continue
+    port_listening "$port" && continue
+    echo "$port"
+    return 0
+  done
+  return 1
+}
+
+# herd_site_for: print "<ssl-flag>|<php-version>" for the Herd link serving
+# the directory $1, or return 1 if Herd doesn't serve it
+herd_site_for() {
+  command -v herd > /dev/null 2>&1 || return 1
+  local row
+  row="$( { herd links 2>/dev/null || true; } | awk -F'|' -v path="$1" '
+    NF > 6 {
+      for (i = 2; i <= 6; i++) gsub(/^ +| +$/, "", $i)
+      if ($5 == path) { print $3 "|" $6; exit }
+    }')"
+  [[ -n "$row" ]] || return 1
+  echo "$row"
+}
+
+# setup_serve: give the worktree its own `php artisan serve` port and, when the
+# main project is linked in Herd, its own Herd site; point APP_URL at it
+setup_serve() {
+  local dir="$1"
+  local proj_name="$2"
+  local proj_path="$3"
+  local folder_name="$4"
+  local env_file="$dir/.env"
+
+  [[ -f "$env_file" ]] || return 0
+
+  local port app_url=""
+  if port="$(allocate_serve_port)"; then
+    set_env_var SERVER_PORT "$port" "$env_file"
+    app_url="http://127.0.0.1:$port"
+    echo "  → Updated .env: SERVER_PORT=$port (php artisan serve)"
+  else
+    echo "  Warning: No free port in 8001-8999 — SERVER_PORT not set."
+  fi
+
+  local herd_info
+  if herd_info="$(herd_site_for "$proj_path")"; then
+    local site tld ssl php flags="" scheme="http"
+    site="$(echo "${proj_name}-${folder_name}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
+    tld="$(herd tld 2>/dev/null || true)"
+    tld="${tld:-test}"
+    ssl="${herd_info%%|*}"
+    php="${herd_info#*|}"
+    if [[ -n "$ssl" ]]; then
+      flags+=" --secure"
+      scheme="https"
+    fi
+    [[ -n "$php" ]] && flags+=" --isolate=$php"
+
+    echo "  → Linking in Herd as ${scheme}://${site}.${tld}"
+    # shellcheck disable=SC2086
+    if (cd "$dir" && herd link "$site" $flags > /dev/null 2>&1); then
+      set_env_var SPROUT_HERD_URL "${scheme}://${site}.${tld}" "$env_file"
+      app_url="${scheme}://${site}.${tld}"
+    else
+      echo "  Warning: herd link failed — use php artisan serve instead."
+    fi
+  fi
+
+  if [[ -n "$app_url" ]]; then
+    set_env_var APP_URL "$app_url" "$env_file"
+    echo "  → Updated .env: APP_URL=$app_url"
+  fi
+}
+
+# unlink_worktree_herd: remove the Herd site that setup_serve created, if any
+unlink_worktree_herd() {
+  local env_file="$1"
+
+  [[ -f "$env_file" ]] || return 0
+  command -v herd > /dev/null 2>&1 || return 0
+
+  local url site
+  url="$(parse_env_value SPROUT_HERD_URL "$env_file")"
+  [[ -n "$url" ]] || return 0
+  site="${url#*://}"
+  site="${site%.*}"
+
+  echo "  → Unlinking Herd site '$site'"
+  herd unlink "$site" > /dev/null 2>&1 || echo "  Warning: herd unlink '$site' failed."
+}
+
 run_setup() {
   local dir="$1"
   local proj_path="${2:-}"
@@ -345,6 +451,11 @@ run_setup() {
   # Redis: own key prefix and DB index so queues/cache don't mix with main
   if [[ -n "$proj_path" && -n "$folder_name" ]]; then
     setup_redis "$dir" "$(basename "$proj_path")" "$folder_name"
+  fi
+
+  # Serving: own artisan-serve port and, if the project is in Herd, own site
+  if [[ -n "$proj_path" && -n "$folder_name" ]]; then
+    setup_serve "$dir" "$(basename "$proj_path")" "$proj_path" "$folder_name"
   fi
 
   # PHP / Composer
@@ -459,14 +570,31 @@ worktree_json() {
     last="{\"hash\":$(json_str "$hash"),\"subject\":$(json_str "$subject"),\"when\":$(json_str "$when")}"
   fi
 
-  local mysql_db="" redis_db="" redis_prefix=""
+  local mysql_db="" redis_db="" redis_prefix="" herd_url="" serve_port="" app_url=""
   if [[ -f "$env_file" ]]; then
     mysql_db="$(parse_env_value DB_DATABASE "$env_file")"
     redis_db="$(parse_env_value REDIS_DB "$env_file")"
     redis_prefix="$(parse_env_value REDIS_PREFIX "$env_file")"
+    herd_url="$(parse_env_value SPROUT_HERD_URL "$env_file")"
+    serve_port="$(parse_env_value SERVER_PORT "$env_file")"
+    app_url="$(parse_env_value APP_URL "$env_file")"
   fi
 
-  printf '{"branch":%s,"folder":%s,"path":%s,"base":%s,"changes":%s,"ahead":%s,"behind":%s,"lastCommit":%s,"mysqlDb":%s,"redisDb":%s,"redisPrefix":%s}' \
+  # Worktrees from before SERVER_PORT: fall back to a local APP_URL's port
+  local local_url_re='^https?://(127\.0\.0\.1|localhost):([0-9]+)'
+  if [[ ! "$serve_port" =~ ^[0-9]+$ && "$app_url" =~ $local_url_re ]]; then
+    serve_port="${BASH_REMATCH[2]}"
+  fi
+
+  local serve_url="" serve_running=false
+  if [[ "$serve_port" =~ ^[0-9]+$ ]]; then
+    serve_url="http://127.0.0.1:$serve_port"
+    if port_listening "$serve_port"; then
+      serve_running=true
+    fi
+  fi
+
+  printf '{"branch":%s,"folder":%s,"path":%s,"base":%s,"changes":%s,"ahead":%s,"behind":%s,"lastCommit":%s,"mysqlDb":%s,"redisDb":%s,"redisPrefix":%s,"herdUrl":%s,"serveUrl":%s,"serveRunning":%s}' \
     "$(json_str "$branch")" \
     "$(json_str "$(basename "$wt")")" \
     "$(json_str "$wt")" \
@@ -477,7 +605,10 @@ worktree_json() {
     "$last" \
     "$(json_str_or_null "$mysql_db")" \
     "$(json_int_or_null "$redis_db")" \
-    "$(json_str_or_null "$redis_prefix")"
+    "$(json_str_or_null "$redis_prefix")" \
+    "$(json_str_or_null "$herd_url")" \
+    "$(json_str_or_null "$serve_url")" \
+    "$serve_running"
 }
 
 # project_json: print one project (with branches and worktrees) as JSON
@@ -637,6 +768,9 @@ cmd_delete() {
     drop_worktree_db "$worktree_path/.env" "$proj_path/.env"
     clear_worktree_redis "$worktree_path/.env"
   fi
+
+  # The Herd link would point at a folder that's about to disappear
+  unlink_worktree_herd "$worktree_path/.env"
 
   if [[ "$force" == true ]]; then
     git -C "$proj_path" worktree remove --force "$worktree_path" \
@@ -849,6 +983,10 @@ SETUP (auto-detected, runs after worktree creation):
   Redis                Own REDIS_PREFIX / CACHE_PREFIX / HORIZON_PREFIX and a
                        free REDIS_DB (= REDIS_CACHE_DB) index, so queues and
                        cache don't mix with the main project or other worktrees
+  Serving              Own SERVER_PORT (8001+) for php artisan serve; if the
+                       main project is linked in Herd, its own Herd site too
+                       (<project>-<folder>.test, secure/PHP matching main).
+                       APP_URL points at the Herd site, else the serve port.
   composer.json        vendor/ seeded from main project + composer dump-autoload
   package.json         node_modules/ seeded from main project + npm/yarn/pnpm install
 

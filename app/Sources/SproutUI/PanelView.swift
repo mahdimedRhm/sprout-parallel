@@ -101,6 +101,10 @@ public struct PanelView: View {
             if let worktree { Openers.warp(worktree.path) }
         case "f":
             if let worktree { Openers.finder(worktree.path) }
+        case "o":
+            if let url = worktree?.herdUrl { Openers.browser(url) }
+        case "O":
+            if let url = worktree?.serveUrl { Openers.browser(url) }
         case "n":
             store.beginCreate()
         case "X":

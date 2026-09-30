@@ -248,6 +248,11 @@ A terminal-styled macOS menu bar app for viewing and managing worktrees across
 every project under `$SPROUT_PROJECTS_ROOT`. It drives the `sprout-parallel`
 CLI (`status --json`, `create`, `delete`), so both always agree.
 
+Each new worktree gets its own `php artisan serve` port (`SERVER_PORT`, from 8001)
+and, when the main project is linked in Herd, its own Herd site
+(`https://<project>-<branch>.test`); `delete` unlinks it. Sprout shows both URLs
+and whether the serve port is running.
+
 Click the leaf in the menu bar to show or hide the Sprout window. Drag its
 background to move it and its edges to resize it; it remembers where you left it.
 
@@ -269,6 +274,7 @@ bash app/build.sh --open # builds Sprout.app into ~/Applications and launches it
 | `⏎` | open in VS Code |
 | `t` | open in Warp |
 | `f` | reveal in Finder |
+| `o` / `⇧O` | open the Herd URL / the `php artisan serve` URL |
 | `n` | new worktree in the selected project |
 | `⌫` | delete the selected worktree |
 | `⇧X` | clear all worktrees of the selected project |
@@ -284,4 +290,5 @@ swift run SproutCoreChecks   # logic checks (no Xcode needed)
 swift run SproutSnapshots    # renders views to app/build/snapshots/*.png
 bash ../tests/status_test.sh # status --json tests
 bash ../tests/clear_test.sh  # clear tests
+bash ../tests/serve_test.sh  # port + Herd link tests
 ```
