@@ -172,6 +172,7 @@ public struct PanelView: View {
             Button("") { Task { await store.refresh() } }.keyboardShortcut("r", modifiers: .command)
             Button("", action: { openPalette("") }).keyboardShortcut("P", modifiers: [.command, .shift])
         }
+        .disabled(store.palette != nil)
         .opacity(0)
         .allowsHitTesting(false)
         .accessibilityHidden(true)

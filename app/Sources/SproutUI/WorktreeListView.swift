@@ -137,11 +137,14 @@ struct WorktreeDetail: View {
     @EnvironmentObject private var terminals: TerminalSessions
     let worktree: Worktree
 
-    private func serviceStatus(_ service: Service) -> some View {
-        let running = terminals.isServiceRunning(service, in: worktree.path)
-        return HStack(spacing: 4) {
-            Text(running ? "● running" : "○ stopped").foregroundStyle(running ? Theme.green : Theme.muted)
-            if !running { Text("· \(service == .serve ? "s" : "q") to start").foregroundStyle(Theme.muted) }
+    @ViewBuilder private func serviceStatus(_ service: Service) -> some View {
+        // isBusy isn't published, so poll like the terminal tab bar does.
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let running = terminals.isServiceRunning(service, in: worktree.path)
+            HStack(spacing: 4) {
+                Text(running ? "● running" : "○ stopped").foregroundStyle(running ? Theme.green : Theme.muted)
+                if !running { Text("· \(service == .serve ? "s" : "q") to start").foregroundStyle(Theme.muted) }
+            }
         }
     }
 

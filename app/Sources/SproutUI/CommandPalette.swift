@@ -49,18 +49,22 @@ func paletteCatalog(store: WorktreeStore, terminals: TerminalSessions, showTermi
     }
 
     let branch = worktree?.branch ?? ""
+    // The worktree's own database name when it has one, else a generic description.
+    let own = worktree?.hasOwnDatabase == true ? worktree?.mysqlDb : nil
+    let dbName = own ?? "the database of \(branch)"
+    let notOwn = worktree?.hasOwnDatabase == false ? "DB_DATABASE isn't this worktree's own database — run db: create" : nil
     return service(.serve) { _ in ServiceCommand.serve }
         + service(.queue) { ServiceCommand.queue(worktreePath: $0) }
         + [
             database(.create, title: "db: create from main", confirm: nil),
             database(.refresh, title: "db: refresh from main",
-                     confirm: ("Refresh the database of \(branch)?",
-                               "It's replaced with a fresh copy of the main project's database.")),
+                     confirm: ("Replace \(dbName) with a fresh copy of the main project's database?",
+                               "Its current data is lost.")),
             database(.drop, title: "db: drop",
-                     confirm: ("Drop the database of \(branch)?", "Its data is lost.")),
-            PaletteAction(title: "db: migrate:fresh --seed", unavailable: noWorktree) {
+                     confirm: ("Drop \(dbName)?", "Its data is lost.")),
+            PaletteAction(title: "db: migrate:fresh --seed", unavailable: noWorktree ?? busy ?? notOwn) {
                 guard let path,
-                      confirmAction("Rebuild the database of \(branch) from migrations?", "All its data is lost."),
+                      confirmAction("Rebuild \(dbName) from migrations?", "All its data is lost."),
                       let tab = terminals.openTab(in: path) else { return }
                 tab.send("php artisan migrate:fresh --seed\n")
                 showTerminal()

@@ -361,6 +361,18 @@ func keyChecks() async {
     checkEqual(store.palette, "queue ", "q opens the palette filtered to queue")
     await press(.escape, window)
 
+    // Window shortcuts do nothing while the palette is open.
+    await shortcut("P", [.command, .shift], window)
+    check(await waitUntil(2) { store.palette != nil }, "⌘⇧P opens the palette before the shortcut check")
+    await shortcut("`", [.control], window)
+    await pause(0.3)
+    await type("abc", into: window)
+    check(store.palette != nil, "⌃` doesn't close the palette")
+    check(store.palette?.contains("abc") == true, "typing after ⌃` still reaches the palette field")
+    check(!terminals.terminalHasFocus, "⌃` doesn't move focus to a terminal behind the palette")
+    await press(.escape, window)
+    check(store.palette == nil, "esc closes the palette")
+
     await shortcut("`", [.control], window)
     check(await waitUntil(3) { terminals.terminalHasFocus }, "back in the terminal")
     await shortcut("P", [.command, .shift], window)

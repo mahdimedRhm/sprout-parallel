@@ -91,6 +91,33 @@ assert_contains "$(echo "$out" | tail -1)" "Error:" "the failure ends with an Er
 assert_eq "$(env_of DB_DATABASE)" "eta_feature_a" "failed refresh leaves .env alone"
 rm "$ROOT/fail"
 
+# A failing mysqldump: exit 2, .env untouched, the main database never dropped
+cat > "$STUBS/mysqldump" <<STUB
+#!/bin/sh
+echo "mysqldump: Got error: 1045" >&2
+exit 2
+STUB
+: > "$CALLS"; before="$(cat "$WT/.env")"
+rc=0; out="$("$SP" db refresh feature/a --project eta 2>&1)" || rc=$?
+assert_eq "$rc" "2" "a failing mysqldump exits 2"
+assert_eq "$(cat "$WT/.env")" "$before" "a failed clone leaves .env untouched"
+assert_eq "$(grep -c 'DROP DATABASE IF EXISTS `eta`;' "$CALLS" || true)" "0" "a failed clone never drops the main database"
+cat > "$STUBS/mysqldump" <<STUB
+#!/bin/sh
+for last; do :; done
+echo "DUMP OF \$last"
+STUB
+
+# A worktree .env that points at the main database: refresh only touches <main>_<folder>
+sed -i '' 's|^DB_DATABASE=.*|DB_DATABASE=eta|' "$WT/.env"
+: > "$CALLS"
+rc=0; "$SP" db refresh feature/a --project eta > /dev/null 2>&1 || rc=$?
+assert_eq "$rc" "0" "refresh with .env pointing at the main DB exits 0"
+assert_eq "$(grep -c 'DROP DATABASE IF EXISTS `eta`;' "$CALLS" || true)" "0" "…never drops the main database"
+assert_eq "$(grep -c 'CREATE DATABASE `eta`' "$CALLS" || true)" "0" "…never creates over the main database"
+assert_contains "$(cat "$CALLS")" 'DROP DATABASE IF EXISTS `eta_feature_a`' "…drops only the worktree database"
+assert_eq "$(env_of DB_DATABASE)" "eta_feature_a" "…and .env ends up pointing at the worktree database"
+
 # ─── drop ─────────────────────────────────────────────────────────────────────
 
 : > "$CALLS"

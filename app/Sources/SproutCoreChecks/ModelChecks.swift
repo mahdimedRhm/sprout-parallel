@@ -34,3 +34,18 @@ func modelChecks() {
     check((try? Status.decode(Data("not json".utf8))) == nil, "invalid JSON throws")
     check((try? Status.decode(Data(statusJSON(["feature/a"]).utf8))) != nil, "statusJSON helper decodes")
 }
+
+func ownDatabaseChecks() {
+    func worktree(folder: String, db: String?) -> Worktree {
+        let dbJSON = db.map { "\"\($0)\"" } ?? "null"
+        let json = #"{"branch":"b","folder":"\#(folder)","path":"/p/\#(folder)","base":"main","changes":0,"ahead":0,"behind":0,"lastCommit":null,"mysqlDb":\#(dbJSON),"redisDb":null,"redisPrefix":null}"#
+        return try! JSONDecoder().decode(Worktree.self, from: Data(json.utf8))
+    }
+    check(worktree(folder: "feature-a", db: "eta_feature_a").hasOwnDatabase, "own database: <main>_<folder>")
+    check(!worktree(folder: "feature-a", db: "eta").hasOwnDatabase, "the main database name isn't the worktree's own")
+    check(!worktree(folder: "feature-a", db: "").hasOwnDatabase, "empty DB name isn't its own")
+    check(!worktree(folder: "feature-a", db: nil).hasOwnDatabase, "nil DB name isn't its own")
+    check(worktree(folder: "fix-T.1-x", db: "eta_fix_T_1_x").hasOwnDatabase, "dashes and dots in the folder become underscores")
+    check(!worktree(folder: "feature-a", db: "eta_feature_b").hasOwnDatabase, "another worktree's database isn't its own")
+    checkEqual(Worktree.dbSafeName("a-b.c d"), "a_b_c_d", "dbSafeName maps non-alphanumerics to underscores")
+}
